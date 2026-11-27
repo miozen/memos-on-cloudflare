@@ -5,6 +5,7 @@ import * as userDB from "../db/user";
 import * as settingDB from "../db/setting";
 import * as memoDB from "../db/memo";
 import * as webhookDB from "../db/webhook";
+import { runD1Batch } from "../db/batch";
 import { hashPassword } from "../auth/password";
 import { generatePAT, hashPAT } from "../auth/pat";
 import { exchangeOAuthCode } from "../auth/oauth";
@@ -448,32 +449,42 @@ userRoutes.delete("/:username", authRequired, async (c) => {
     r2Keys.add(user.avatar_url);
   }
 
+  const deleteStatements: D1PreparedStatement[] = [];
   for (const chunk of chunkValues(memoIds, 450)) {
     const placeholders = createPlaceholders(chunk.length);
-    await c.env.DB.prepare(
-      `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
-    ).bind(...chunk, ...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(
+        `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
+      ).bind(...chunk, ...chunk),
+    );
   }
   for (const chunk of chunkValues(memoUids, 900)) {
-    await c.env.DB.prepare(
-      `DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`
-    ).bind(...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(
+        `DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`
+      ).bind(...chunk),
+    );
   }
   for (const chunk of chunkValues(memoIds, 900)) {
-    await c.env.DB.prepare(
-      `DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`
-    ).bind(...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(
+        `DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`
+      ).bind(...chunk),
+    );
   }
 
-  await c.env.DB.prepare("DELETE FROM attachment WHERE creator_id = ?").bind(user.id).run();
-  await c.env.DB.prepare("DELETE FROM reaction WHERE creator_id = ?").bind(user.id).run();
-  await c.env.DB.prepare("DELETE FROM memo_share WHERE creator_id = ?").bind(user.id).run();
-  await c.env.DB.prepare("DELETE FROM memo WHERE creator_id = ?").bind(user.id).run();
-  await c.env.DB.prepare("DELETE FROM inbox WHERE sender_id = ? OR receiver_id = ?").bind(user.id, user.id).run();
-  await c.env.DB.prepare("DELETE FROM user_identity WHERE user_id = ?").bind(user.id).run();
-  await c.env.DB.prepare("DELETE FROM user_setting WHERE user_id = ?").bind(user.id).run();
+  deleteStatements.push(
+    c.env.DB.prepare("DELETE FROM attachment WHERE creator_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM reaction WHERE creator_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM memo_share WHERE creator_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM memo WHERE creator_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM inbox WHERE sender_id = ? OR receiver_id = ?").bind(user.id, user.id),
+    c.env.DB.prepare("DELETE FROM user_identity WHERE user_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM user_setting WHERE user_id = ?").bind(user.id),
+    c.env.DB.prepare("DELETE FROM user WHERE id = ?").bind(user.id),
+  );
 
-  await userDB.deleteUser(c.env.DB, user.id);
+  await runD1Batch(c.env.DB, deleteStatements);
 
   if (r2Keys.size > 0) {
     await Promise.allSettled([...r2Keys].map((key) => c.env.BUCKET.delete(key)));

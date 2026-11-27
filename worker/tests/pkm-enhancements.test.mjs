@@ -23,6 +23,20 @@ function createMockDb(db) {
       });
       return prepare();
     },
+    async batch(statements) {
+      db.exec("BEGIN");
+      try {
+        const results = [];
+        for (const stmt of statements) {
+          results.push(await stmt.run());
+        }
+        db.exec("COMMIT");
+        return results;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 }
 

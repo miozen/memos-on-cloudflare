@@ -65,6 +65,13 @@ async function getRequestToken(): Promise<string | null> {
   return token;
 }
 
+const AUTH_REFRESH_EXEMPT_PATHS = new Set(["/api/v1/auth/signin", "/api/v1/auth/signup", "/api/v1/auth/refresh", "/api/v1/auth/signout"]);
+
+export function shouldSkipAuthRefreshRetry(path: string): boolean {
+  const pathname = path.split(/[?#]/, 1)[0];
+  return AUTH_REFRESH_EXEMPT_PATHS.has(pathname);
+}
+
 export async function apiRequest<T>(method: string, path: string, body?: unknown, options?: { isFormData?: boolean }): Promise<T> {
   const token = await getRequestToken();
   const headers: Record<string, string> = {};
@@ -90,7 +97,7 @@ export async function apiRequest<T>(method: string, path: string, body?: unknown
     credentials: "include",
   });
 
-  if (resp.status === 401 && token) {
+  if (resp.status === 401 && token && !shouldSkipAuthRefreshRetry(path)) {
     try {
       await refreshAccessToken();
       const newToken = getAccessToken();
@@ -135,7 +142,7 @@ export async function apiDownload(path: string, fallbackFilename: string): Promi
   }
 
   let resp = await fetch(path, { method: "GET", headers, credentials: "include" });
-  if (resp.status === 401 && token) {
+  if (resp.status === 401 && token && !shouldSkipAuthRefreshRetry(path)) {
     await refreshAccessToken();
     const newToken = getAccessToken();
     if (newToken) {

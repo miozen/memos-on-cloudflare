@@ -12,6 +12,7 @@ let env;
 let tokens;
 let objects;
 let failNextAttachmentInsert = false;
+let failOnBatchSqlPattern = null;
 const originalFetch = globalThis.fetch;
 
 beforeEach(async () => {
@@ -20,6 +21,7 @@ beforeEach(async () => {
     sqlite.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8"));
   }
   failNextAttachmentInsert = false;
+  failOnBatchSqlPattern = null;
 
   const DB = {
     prepare(sql) {
@@ -33,9 +35,29 @@ beforeEach(async () => {
           return sqlite.prepare(sql).get(...parameters) ?? null;
         },
         all: async () => ({ results: sqlite.prepare(sql).all(...parameters) }),
-        run: async () => sqlite.prepare(sql).run(...parameters),
+        run: async () => {
+          if (failOnBatchSqlPattern && sql.includes(failOnBatchSqlPattern)) {
+            failOnBatchSqlPattern = null;
+            throw new Error("Simulated D1 batch step failure");
+          }
+          return sqlite.prepare(sql).run(...parameters);
+        },
       });
       return prepare();
+    },
+    async batch(statements) {
+      sqlite.exec("BEGIN");
+      try {
+        const results = [];
+        for (const stmt of statements) {
+          results.push(await stmt.run());
+        }
+        sqlite.exec("COMMIT");
+        return results;
+      } catch (error) {
+        sqlite.exec("ROLLBACK");
+        throw error;
+      }
     },
   };
 
@@ -411,4 +433,45 @@ test("serves base64 data image avatars safely without 500 and validates reaction
   });
   assert.equal(signupRes.status, 200);
   assert.ok(deletedKeys.includes("cfmemos:v1:instance:profile"));
+});
+
+test("rolls back multi-step memo delete and attachment rebind atomically via D1 batch", async () => {
+  const form = new FormData();
+  form.append("file", new File(["atomic-data"], "atomic.txt", { type: "text/plain" }));
+  const uploadRes = await request("/api/v1/attachments", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokens.alice}` },
+    body: form,
+  });
+  assert.equal(uploadRes.status, 201);
+  const att = await uploadRes.json();
+
+  const memoRes = await request("/api/v1/memos", {
+    method: "POST",
+    ...asUser("alice", { content: "atomic parent", visibility: "PUBLIC", attachments: [att.name] }),
+  });
+  assert.equal(memoRes.status, 201);
+  const memo = await memoRes.json();
+  const memoUid = memo.name.replace("memos/", "");
+
+  // Simulate mid-batch failure while rebinding attachments; attachment must remain bound to the memo.
+  failOnBatchSqlPattern = "AND creator_id = ?";
+  const rebindFailRes = await request(`/api/v1/memos/${memoUid}/attachments`, {
+    method: "PATCH",
+    ...asUser("alice", { attachments: [att.name] }),
+  });
+  assert.equal(rebindFailRes.status, 500);
+  const attRowAfterRebindFail = sqlite.prepare("SELECT memo_id FROM attachment WHERE uid = ?").get(att.uid);
+  assert.ok(attRowAfterRebindFail.memo_id > 0);
+
+  // Simulate mid-batch failure while deleting memo; attachment, memo, and R2 object must remain intact.
+  failOnBatchSqlPattern = "DELETE FROM memo WHERE id IN";
+  const deleteFailRes = await request(`/api/v1/memos/${memoUid}`, {
+    method: "DELETE",
+    ...asUser("alice"),
+  });
+  assert.equal(deleteFailRes.status, 500);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS c FROM memo WHERE uid = ?").get(memoUid).c, 1);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS c FROM attachment WHERE uid = ?").get(att.uid).c, 1);
+  assert.equal(objects.size, 1);
 });

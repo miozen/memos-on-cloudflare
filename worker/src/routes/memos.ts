@@ -6,6 +6,7 @@ import * as relationDB from "../db/relation";
 import * as reactionDB from "../db/reaction";
 import * as shareDB from "../db/share";
 import * as settingDB from "../db/setting";
+import { runD1Batch } from "../db/batch";
 import { createErrorBody } from "../error";
 import { deleteCachedKeys, getCachedJson, putCachedJson, sha256Hex } from "../cache";
 import { buildMemoFilterWhere, MemoFilterError } from "../filter/memo-filter";
@@ -14,6 +15,7 @@ import {
   chunkValues,
   createPlaceholders,
   extractMentionUsernames,
+  normalizePublicHttpUrl,
   parseIsoTimestampSeconds,
   parsePageSize,
   parsePageTokenOffset,
@@ -64,52 +66,8 @@ interface LinkMetadata {
 const MAX_LINK_METADATA_BATCH_SIZE = 10;
 const MAX_LINK_METADATA_URL_LENGTH = 2048;
 
-function isBlockedLinkMetadataHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (!host || host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal") {
-    return true;
-  }
-  if (host === "::1" || (host.includes(":") && (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")))) {
-    return true;
-  }
-
-  const ipv4Parts = host.split(".");
-  if (ipv4Parts.length !== 4) {
-    return false;
-  }
-
-  const octets = ipv4Parts.map((part) => Number(part));
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
-    return false;
-  }
-
-  const [first, second] = octets;
-  return (
-    first === 0 ||
-    first === 10 ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
-}
-
 function normalizeLinkMetadataUrl(rawUrl: string | undefined): string | undefined {
-  const trimmedUrl = rawUrl?.trim();
-  if (!trimmedUrl || trimmedUrl.length > MAX_LINK_METADATA_URL_LENGTH) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(trimmedUrl);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || isBlockedLinkMetadataHostname(url.hostname)) {
-      return undefined;
-    }
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return undefined;
-  }
+  return normalizePublicHttpUrl(rawUrl, MAX_LINK_METADATA_URL_LENGTH);
 }
 
 function emptyLinkMetadata(url?: string): LinkMetadata {
@@ -633,20 +591,22 @@ async function resolveAttachmentIds(db: D1Database, user: UserPayload, reference
 
 async function setMemoAttachments(db: D1Database, memoId: number, user: UserPayload, references: unknown[]) {
   const attachmentIds = await resolveAttachmentIds(db, user, references);
-
-  await db.prepare("UPDATE attachment SET memo_id = NULL WHERE memo_id = ?").bind(memoId).run();
-  if (attachmentIds.length === 0) {
-    return;
-  }
+  const statements: D1PreparedStatement[] = [
+    db.prepare("UPDATE attachment SET memo_id = NULL WHERE memo_id = ?").bind(memoId),
+  ];
 
   for (const chunk of chunkValues(attachmentIds, 900)) {
     const placeholders = createPlaceholders(chunk.length);
     if (user.role === "ADMIN") {
-      await db.prepare(`UPDATE attachment SET memo_id = ? WHERE id IN (${placeholders})`).bind(memoId, ...chunk).run();
+      statements.push(db.prepare(`UPDATE attachment SET memo_id = ? WHERE id IN (${placeholders})`).bind(memoId, ...chunk));
     } else {
-      await db.prepare(`UPDATE attachment SET memo_id = ? WHERE id IN (${placeholders}) AND creator_id = ?`).bind(memoId, ...chunk, user.id).run();
+      statements.push(
+        db.prepare(`UPDATE attachment SET memo_id = ? WHERE id IN (${placeholders}) AND creator_id = ?`).bind(memoId, ...chunk, user.id),
+      );
     }
   }
+
+  await runD1Batch(db, statements);
 }
 
 // Create memo
@@ -807,7 +767,7 @@ memoRoutes.post("/tags:rename", authRequired, async (c) => {
     "SELECT id, content, payload FROM memo WHERE creator_id = ?"
   ).bind(user.id).all<{ id: number; content: string; payload: string }>();
 
-  let updatedCount = 0;
+  const updateStatements: D1PreparedStatement[] = [];
   for (const row of candidateRows) {
     const nextContent = replaceMemoTagInContent(row.content, oldTag, newTag);
     if (nextContent === row.content) {
@@ -819,14 +779,16 @@ memoRoutes.post("/tags:rename", authRequired, async (c) => {
       ...existingPayload,
       ...parseMemoPayload(nextContent),
     };
-    await memoDB.updateMemo(c.env.DB, row.id, {
-      content: nextContent,
-      payload: JSON.stringify(nextPayload),
-    });
-    updatedCount++;
+    updateStatements.push(
+      c.env.DB.prepare(
+        "UPDATE memo SET content = ?, payload = ?, updated_ts = strftime('%s', 'now') WHERE id = ?"
+      ).bind(nextContent, JSON.stringify(nextPayload), row.id),
+    );
   }
 
+  const updatedCount = updateStatements.length;
   if (updatedCount > 0) {
+    await runD1Batch(c.env.DB, updateStatements);
     await invalidateMemoDerivedCaches(c.env.CACHE, [user.username]);
   }
 
@@ -1091,21 +1053,32 @@ memoRoutes.delete("/:id", authRequired, async (c) => {
   const attachmentRows = await listAttachmentRowsByMemoIds(c.env.DB, memoIdsToDelete);
   const r2Keys = attachmentRows.map((att) => att.reference).filter((ref): ref is string => Boolean(ref));
 
+  const deleteStatements: D1PreparedStatement[] = [];
   for (const chunk of chunkValues(memoIdsToDelete, 900)) {
-    await c.env.DB.prepare(`DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(`DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk),
+    );
   }
   for (const chunk of chunkValues(memoIdsToDelete, 450)) {
     const placeholders = createPlaceholders(chunk.length);
-    await c.env.DB.prepare(
-      `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
-    ).bind(...chunk, ...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(
+        `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
+      ).bind(...chunk, ...chunk),
+    );
   }
   for (const chunk of chunkValues(memoUids, 900)) {
-    await c.env.DB.prepare(`DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(`DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk),
+    );
   }
   for (const chunk of chunkValues(memoIdsToDelete, 900)) {
-    await c.env.DB.prepare(`DELETE FROM memo WHERE id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+    deleteStatements.push(
+      c.env.DB.prepare(`DELETE FROM memo WHERE id IN (${createPlaceholders(chunk.length)})`).bind(...chunk),
+    );
   }
+
+  await runD1Batch(c.env.DB, deleteStatements);
 
   if (r2Keys.length > 0) {
     await Promise.allSettled(r2Keys.map((key) => c.env.BUCKET.delete(key)));

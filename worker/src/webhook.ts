@@ -1,5 +1,6 @@
 import * as webhookDB from "./db/webhook";
 import type { UserPayload } from "./types";
+import { normalizePublicHttpUrl } from "./validation";
 
 export type MemoWebhookEventType = "memo.created" | "memo.updated" | "memo.deleted";
 
@@ -20,52 +21,8 @@ interface DeliverMemoWebhookEventOptions {
 const MAX_WEBHOOK_URL_LENGTH = 2048;
 const WEBHOOK_TIMEOUT_MS = 10_000;
 
-function isBlockedWebhookHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (!host || host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal") {
-    return true;
-  }
-  if (host === "::1" || (host.includes(":") && (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")))) {
-    return true;
-  }
-
-  const ipv4Parts = host.split(".");
-  if (ipv4Parts.length !== 4) {
-    return false;
-  }
-
-  const octets = ipv4Parts.map((part) => Number(part));
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
-    return false;
-  }
-
-  const [first, second] = octets;
-  return (
-    first === 0 ||
-    first === 10 ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
-}
-
 export function normalizeWebhookUrl(rawUrl: string | undefined): string | undefined {
-  const trimmedUrl = rawUrl?.trim();
-  if (!trimmedUrl || trimmedUrl.length > MAX_WEBHOOK_URL_LENGTH) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(trimmedUrl);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || isBlockedWebhookHostname(url.hostname)) {
-      return undefined;
-    }
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return undefined;
-  }
+  return normalizePublicHttpUrl(rawUrl, MAX_WEBHOOK_URL_LENGTH);
 }
 
 export function getWebhookUrlValidationError(rawUrl: string | undefined): string | undefined {

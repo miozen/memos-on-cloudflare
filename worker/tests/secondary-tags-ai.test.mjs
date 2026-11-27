@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
 import app from "../src/index.ts";
 import { createAccessToken } from "../src/auth/jwt.ts";
-import { DEFAULT_TAG_SUGGESTION_MODEL } from "../src/ai-models.ts";
+import { DEFAULT_TAG_SUGGESTION_MODEL, WORKERS_AI_TAG_MODELS } from "../src/ai-models.ts";
 import { DEFAULT_PKM_SECONDARY_TAGS, DEFAULT_PKM_TAG_SET } from "../src/default-tags.ts";
 import { extractMemoTags, isValidTagText } from "../src/tags.ts";
 
@@ -105,6 +105,17 @@ test("preset secondary dictionary has 139 valid tags and exactly matches fronten
   const frontendMap = Function(`"use strict"; return (${match[1]});`)();
   const frontendFullTags = Object.entries(frontendMap).flatMap(([root, subs]) => subs.map((sub) => `${root}/${sub}`));
   assert.deepEqual(frontendFullTags, [...DEFAULT_PKM_SECONDARY_TAGS]);
+
+  // Verify frontend Workers AI model list matches backend allowlist identically
+  const aiSectionSource = readFileSync(new URL("../../web/src/components/Settings/AISection.tsx", import.meta.url), "utf8");
+  const modelsMatch = aiSectionSource.match(/WORKERS_AI_TAG_MODELS\s*=\s*\[([\s\S]*?)\]\s*as const;/);
+  assert.ok(modelsMatch);
+  const modelIds = [...modelsMatch[1].matchAll(/id:\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    modelIds,
+    WORKERS_AI_TAG_MODELS.map((m) => m.id),
+  );
+  assert.ok(aiSectionSource.includes(`DEFAULT_TAG_SUGGESTION_MODEL = "${DEFAULT_TAG_SUGGESTION_MODEL}"`));
 });
 
 test("deterministic validation enforces 12 roots, <=2 levels, max 1 new AI-coined secondary tag, treats preset tags as reuse, and preserves manual tags", async () => {
