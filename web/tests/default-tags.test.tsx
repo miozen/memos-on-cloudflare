@@ -2,10 +2,14 @@ import { create } from "@bufbuild/protobuf";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import TagSuggestions from "@/components/MemoEditor/Editor/TagSuggestions";
+import TagSuggestions, {
+  buildTagAutocompletePool,
+  filterTagSuggestions,
+  MAX_TAG_AUTOCOMPLETE_RESULTS,
+} from "@/components/MemoEditor/Editor/TagSuggestions";
 import TagsSection from "@/components/Settings/TagsSection";
 import { colorToHex } from "@/lib/color";
-import { DEFAULT_PKM_TAG_NAMES, DEFAULT_PKM_TAGS } from "@/lib/default-tags";
+import { DEFAULT_PKM_PRESET_SECONDARY_TAGS, DEFAULT_PKM_TAG_NAMES, DEFAULT_PKM_TAGS } from "@/lib/default-tags";
 import { findTagMetadata } from "@/lib/tag";
 import {
   InstanceSetting_Key,
@@ -223,9 +227,12 @@ describe("default PKM tag rules and UI", () => {
     });
   });
 
-  it("provides the 12 preset tags as # autocomplete suggestions after used tags without duplicates", () => {
+  it("merges used tags and 139 preset secondary tags for # autocomplete without dumping subtags on bare #", () => {
+    expect(DEFAULT_PKM_PRESET_SECONDARY_TAGS).toHaveLength(139);
     currentTagCounts = {
       自定义标签: 5,
+      "技术/自研网关": 4,
+      "技术/Cloudflare": 2,
       技术: 3,
     };
 
@@ -233,11 +240,34 @@ describe("default PKM tag rules and UI", () => {
 
     expect(capturedSuggestionsItems).toHaveLength(1);
     const items = capturedSuggestionsItems[0];
-    expect(items.slice(0, 2)).toEqual(["自定义标签", "技术"]);
-    expect(items).toHaveLength(13);
-    expect(new Set(items).size).toBe(13);
+    // Used tags come first (sorted by count), followed by remaining primary + preset secondary tags, deduplicated
+    expect(items.slice(0, 4)).toEqual(["自定义标签", "技术/自研网关", "技术", "技术/Cloudflare"]);
+    expect(new Set(items).size).toBe(items.length);
     for (const tag of DEFAULT_PKM_TAG_NAMES) {
       expect(items).toContain(tag);
     }
+
+    const pool = buildTagAutocompletePool(currentTagCounts);
+
+    // Bare `#` shows only the 12 primary categories
+    expect(filterTagSuggestions(pool, "")).toEqual([...DEFAULT_PKM_TAG_NAMES]);
+
+    // `#技术/` matches technical secondary tags, prioritizing user's used ones first
+    const techSubs = filterTagSuggestions(pool, "技术/");
+    expect(techSubs.slice(0, 2)).toEqual(["技术/自研网关", "技术/Cloudflare"]);
+    expect(techSubs).toContain("技术/Docker");
+    expect(techSubs.length).toBeLessThanOrEqual(MAX_TAG_AUTOCOMPLETE_RESULTS);
+
+    // `#Cloudflare` directly matches `技术/Cloudflare`
+    expect(filterTagSuggestions(pool, "cloudflare")).toContain("技术/Cloudflare");
+
+    // `#技术` ranks exact match -> prefix match (used first) -> contains match
+    const techMatches = filterTagSuggestions(pool, "技术");
+    expect(techMatches[0]).toBe("技术");
+    expect(techMatches[1]).toBe("技术/自研网关");
+    expect(techMatches[2]).toBe("技术/Cloudflare");
+
+    // Unknown free-form tag yields empty suggestions so user can type freely
+    expect(filterTagSuggestions(pool, "完全自由自定义词")).toEqual([]);
   });
 });

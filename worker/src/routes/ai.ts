@@ -3,6 +3,9 @@ import type { Env, UserPayload } from "../types";
 import { authRequired } from "../middleware/auth";
 import * as settingDB from "../db/setting";
 import {
+  DEFAULT_PKM_SECONDARY_TAGS,
+  DEFAULT_PKM_SECONDARY_TAGS_BY_ROOT,
+  DEFAULT_PKM_SECONDARY_TAG_SET,
   DEFAULT_PKM_TAG_NAMES,
   DEFAULT_PKM_TAG_SET,
   PKM_CATEGORY_SPECS,
@@ -122,6 +125,10 @@ export function buildUserTagIndex(counts: Map<string, number>): UserTagIndex {
 
   for (const root of DEFAULT_PKM_TAG_NAMES) {
     secondaryEntriesByRoot.set(root, []);
+    lowerEntries.set(root.toLowerCase(), { tag: root, count: 0 });
+  }
+  for (const presetTag of DEFAULT_PKM_SECONDARY_TAGS) {
+    lowerEntries.set(presetTag.toLowerCase(), { tag: presetTag, count: 0 });
   }
 
   for (const [tag, count] of counts.entries()) {
@@ -135,7 +142,12 @@ export function buildUserTagIndex(counts: Map<string, number>): UserTagIndex {
 
     const lower = tag.toLowerCase();
     const existingLower = lowerEntries.get(lower);
-    if (!existingLower || count > existingLower.count || (count === existingLower.count && tag < existingLower.tag)) {
+    if (
+      !existingLower ||
+      existingLower.count === 0 ||
+      count > existingLower.count ||
+      (count === existingLower.count && tag < existingLower.tag)
+    ) {
       lowerEntries.set(lower, { tag, count });
     }
 
@@ -293,8 +305,9 @@ export function validateAndNormalizeTagSuggestions(
       }
     }
 
+    const isInCandidatePool = tagIndex.realTags.has(canonical) || DEFAULT_PKM_SECONDARY_TAG_SET.has(canonical);
     const mode: TagSuggestionMode =
-      canonicalSegments.length === 1 ? "primary" : tagIndex.realTags.has(canonical) ? "reuse" : "new";
+      canonicalSegments.length === 1 ? "primary" : isInCandidatePool ? "reuse" : "new";
 
     if (mode === "new") {
       if (newSecondaryCount >= MAX_NEW_SECONDARY_TAGS) {
@@ -362,52 +375,67 @@ export function suggestTagsHeuristically(
   return validateAndNormalizeTagSuggestions(ordered, contentTags, tagIndex);
 }
 
+function getMergedCandidatesForRoot(
+  root: (typeof DEFAULT_PKM_TAG_NAMES)[number],
+  tagIndex: UserTagIndex,
+): { realSubs: string[]; presetSubs: string[] } {
+  const realSubs = tagIndex.secondaryByRoot.get(root) ?? [];
+  const realLowerSet = new Set(realSubs.map((tag) => tag.toLowerCase()));
+  const presetSubs = (DEFAULT_PKM_SECONDARY_TAGS_BY_ROOT[root] ?? [])
+    .map((sub) => `${root}/${sub}`)
+    .filter((tag) => !realLowerSet.has(tag.toLowerCase()));
+  return { realSubs, presetSubs };
+}
+
 function buildTagSuggestionPrompts(
   content: string,
   contentTags: string[],
   tagIndex: UserTagIndex,
 ): { systemPrompt: string; userPrompt: string } {
   const lockedRoots = Array.from(
-    new Set(contentTags.map((tag) => tag.split("/")[0]).filter((root) => DEFAULT_PKM_TAG_SET.has(root))),
+    new Set(
+      contentTags
+        .map((tag) => tag.split("/")[0])
+        .filter((root): root is (typeof DEFAULT_PKM_TAG_NAMES)[number] => DEFAULT_PKM_TAG_SET.has(root)),
+    ),
   );
 
-  const categoryReference = PKM_CATEGORY_SPECS.map(
-    (spec) => `${spec.name}（${spec.basis}，如 ${spec.granularityExamples.slice(0, 2).join("/")}）`,
-  ).join("、");
+  const categoryReference = PKM_CATEGORY_SPECS.map((spec) => `${spec.name}（${spec.basis}）`).join("、");
 
   const systemPrompt = [
-    "你是个人笔记标签助手，请为笔记推荐 1～3 个中文或常见英文标签。",
+    "你是个人笔记标签助手，请根据笔记的主要内容和记录目的推荐标签。",
     "",
     `固定一级分类（共12个）：${categoryReference}。`,
     "",
-    "归类建议：",
-    "1. 只要笔记有明确主题、技术产品、项目名或具体场景，优先推荐「一级/二级」（如 技术/Cloudflare、项目/谱匠、日常/生活感悟）；只有零碎无主题随笔才只给一级标签。",
-    "2. 优先复用下方“已有二级标签”里相近或同系列的标签（如 Workers/D1/R2 都复用 技术/Cloudflare）。",
-    "3. 需要新建时，提炼一个简短、通用、以后能继续用的主题词，最多一个 /（不要三级）。",
-    "4. 常见区分：通用技术/工具归「技术」，自己推进的独立项目归「项目」；零星消费体验归「日常」，理财/账目/成本归「财务」。",
+    "推荐原则：",
+    "1. 默认推荐 1 个最贴切标签；仅当笔记明确涵盖多个独立主题时才补充，最多 3 个。",
+    "2. 优先从下方候选标签中选择语义最合适的；匹配程度相近时，优先复用标有「已用」的实际标签。",
+    "3. 候选池中确实没有合适标签，且当前主题具有长期归类价值时，才新建 1 个简短通用的二级标签。",
+    "4. 无需进一步细分时，允许仅推荐一级标签。",
+    "5. 禁止三级（最多一个 /），不要同时返回父级标签和对应的子级标签，也不要重复正文已有标签。",
     "",
     '仅返回 JSON 字符串数组（不要加 # 或多余文字），例如：["技术/Cloudflare"]',
   ].join("\n");
 
   const existingTagLines: string[] = [];
   if (lockedRoots.length > 0) {
-    existingTagLines.push(`用户已选一级分类（保留勿替换，优先在该分类下选或提炼二级标签）: ${lockedRoots.join("、")}`);
+    existingTagLines.push(`用户已选一级分类（保留勿替换，优先在该分类下选择或补充二级标签）: ${lockedRoots.join("、")}`);
     for (const root of lockedRoots) {
-      const subs = tagIndex.secondaryByRoot.get(root) ?? [];
-      existingTagLines.push(`- ${root} 已有二级标签: ${subs.length > 0 ? subs.join(", ") : "暂无"}`);
+      const { realSubs, presetSubs } = getMergedCandidatesForRoot(root, tagIndex);
+      const parts: string[] = [];
+      if (realSubs.length > 0) parts.push(`已用: ${realSubs.join(", ")}`);
+      if (presetSubs.length > 0) parts.push(`预设: ${presetSubs.join(", ")}`);
+      existingTagLines.push(`- ${root}（${parts.join(" | ")}）`);
     }
   } else {
-    const populatedLines: string[] = [];
+    existingTagLines.push("候选二级标签（按一级分类分组，「已用」为当前用户实际标签，「预设」为内置候选）：");
     for (const root of DEFAULT_PKM_TAG_NAMES) {
-      const subs = tagIndex.secondaryByRoot.get(root) ?? [];
-      if (subs.length > 0) {
-        populatedLines.push(`- ${root}: ${subs.join(", ")}`);
+      const { realSubs, presetSubs } = getMergedCandidatesForRoot(root, tagIndex);
+      if (realSubs.length > 0) {
+        existingTagLines.push(`- ${root} [已用: ${realSubs.join(", ")}] 预设: ${presetSubs.join(", ")}`);
+      } else {
+        existingTagLines.push(`- ${root}: ${presetSubs.join(", ")}`);
       }
-    }
-    if (populatedLines.length > 0) {
-      existingTagLines.push("已有二级标签（优先复用）：", ...populatedLines);
-    } else {
-      existingTagLines.push("已有二级标签：暂无（请根据笔记主题自然提炼）");
     }
   }
 

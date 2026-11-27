@@ -36,6 +36,82 @@ export const DEFAULT_PKM_TAG_NAMES = [
 
 export type DefaultPkmTagName = (typeof DEFAULT_PKM_TAG_NAMES)[number];
 
+export const DEFAULT_PKM_SECONDARY_TAGS_BY_ROOT: Record<DefaultPkmTagName, readonly string[]> = {
+  日常: ["随笔", "生活感悟", "个人见闻", "购物", "美食烹饪", "影音娱乐", "阅读", "社交", "兴趣爱好", "回忆", "汽车"],
+  灵感: ["产品创意", "功能设计", "商业构想", "内容创作", "设计创意", "技术构想", "生活创意", "写作构思"],
+  待办: ["个人事务", "采购计划", "工作事项", "家庭事务", "项目任务", "财务处理", "学习计划", "联系沟通"],
+  资料: [
+    "历史",
+    "法律",
+    "政策",
+    "地理",
+    "经济",
+    "政治",
+    "文学",
+    "哲学",
+    "教育",
+    "语言",
+    "文化",
+    "自然科学",
+    "社会科学",
+    "百科常识",
+    "书摘",
+    "新闻资讯",
+    "资源收藏",
+  ],
+  技术: [
+    "Cloudflare",
+    "AI工具",
+    "前端开发",
+    "后端开发",
+    "桌面开发",
+    "移动开发",
+    "数据库",
+    "网络技术",
+    "网络安全",
+    "Linux",
+    "Windows",
+    "OpenWrt",
+    "Sing-box",
+    "Docker",
+    "Git",
+    "TypeScript",
+    "Python",
+    "CSharp",
+    "CAD",
+    "运维部署",
+    "架构设计",
+    "效率软件",
+    "硬件设备",
+  ],
+  项目: ["谱匠", "Omnia", "Memos", "万象收银", "云族谱", "PixShell", "导航页"],
+  工作: [
+    "通信设计",
+    "门店经营",
+    "项目管理",
+    "客户管理",
+    "团队管理",
+    "会议纪要",
+    "汇报总结",
+    "行业动态",
+    "市场营销",
+    "供应链",
+    "商品管理",
+    "商业合作",
+  ],
+  财务: ["投资理财", "消费", "收支记账", "预算", "经营成本", "税务", "保险", "资产管理", "银行业务", "债务管理"],
+  家族: ["族谱", "迁徙历史", "人物传记", "宗族文献", "口述历史", "老宅故土", "世系考据", "家风家训", "宗祠", "祭祀", "家族事务"],
+  家庭: ["房屋设计", "房屋建设", "装修", "家居", "子女教育", "亲子关系", "家务", "亲友往来", "宠物", "家庭活动", "家用电器"],
+  健康: ["饮食营养", "运动健身", "睡眠", "体检", "疾病", "就医记录", "药品", "中医中药", "心理健康", "体重管理", "养生", "个人护理"],
+  旅行: ["旅行攻略", "自然风光", "人文景观", "历史古迹", "自驾游", "交通出行", "住宿", "地方美食", "旅行见闻"],
+} as const;
+
+export const DEFAULT_PKM_SECONDARY_TAGS: readonly string[] = DEFAULT_PKM_TAG_NAMES.flatMap((root) =>
+  DEFAULT_PKM_SECONDARY_TAGS_BY_ROOT[root].map((sub) => `${root}/${sub}`),
+);
+
+export const DEFAULT_PKM_SECONDARY_TAG_SET = new Set<string>(DEFAULT_PKM_SECONDARY_TAGS);
+
 export interface PkmCategorySpec {
   name: DefaultPkmTagName;
   basis: string;
@@ -43,17 +119,17 @@ export interface PkmCategorySpec {
 }
 
 export const PKM_CATEGORY_SPECS: readonly PkmCategorySpec[] = [
-  { name: "日常", basis: "生活场景", granularityExamples: ["购物", "生活感悟", "个人见闻"] },
+  { name: "日常", basis: "生活场景", granularityExamples: ["随笔", "生活感悟", "购物"] },
   { name: "灵感", basis: "创意方向", granularityExamples: ["产品创意", "商业构想", "功能设计"] },
   { name: "待办", basis: "事务类别", granularityExamples: ["个人事务", "采购计划"] },
   { name: "资料", basis: "知识领域", granularityExamples: ["历史", "法律", "政策", "地理"] },
   { name: "技术", basis: "技术领域或独立技术产品", granularityExamples: ["Cloudflare", "网络技术", "AI工具"] },
   { name: "项目", basis: "独立项目名称", granularityExamples: ["谱匠", "Omnia", "Memos"] },
   { name: "工作", basis: "职业或经营领域", granularityExamples: ["通信设计", "门店经营"] },
-  { name: "财务", basis: "财务活动类型", granularityExamples: ["投资", "消费", "经营成本"] },
+  { name: "财务", basis: "财务活动类型", granularityExamples: ["投资理财", "消费", "经营成本"] },
   { name: "家族", basis: "家族研究方向", granularityExamples: ["族谱", "迁徙历史", "人物传记"] },
   { name: "家庭", basis: "家庭事务类型", granularityExamples: ["房屋设计", "子女教育", "家居"] },
-  { name: "健康", basis: "健康知识领域", granularityExamples: ["饮食", "运动", "健康护理"] },
+  { name: "健康", basis: "健康知识领域", granularityExamples: ["饮食营养", "运动健身", "个人护理"] },
   { name: "旅行", basis: "旅行主题", granularityExamples: ["自然风光", "人文景观", "旅行攻略"] },
 ] as const;
 

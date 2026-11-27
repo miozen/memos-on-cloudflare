@@ -5,6 +5,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import app from "../src/index.ts";
 import { createAccessToken } from "../src/auth/jwt.ts";
 import { DEFAULT_TAG_SUGGESTION_MODEL } from "../src/ai-models.ts";
+import { DEFAULT_PKM_SECONDARY_TAGS, DEFAULT_PKM_TAG_SET } from "../src/default-tags.ts";
+import { extractMemoTags, isValidTagText } from "../src/tags.ts";
 
 const secret = "local-secondary-tags-ai-test-secret";
 let sqlite;
@@ -82,7 +84,30 @@ afterEach(() => {
   sqlite.close();
 });
 
-test("deterministic validation enforces 12 roots, <=2 levels, max 1 new secondary tag, max 3 tags, and preserves manual tags", async () => {
+test("preset secondary dictionary has 139 valid tags and exactly matches frontend preset list", async () => {
+  assert.equal(DEFAULT_PKM_SECONDARY_TAGS.length, 139);
+  const seenLower = new Set();
+  for (const tag of DEFAULT_PKM_SECONDARY_TAGS) {
+    assert.ok(isValidTagText(tag), `invalid preset tag: ${tag}`);
+    assert.deepEqual(extractMemoTags(`#${tag} 测试`), [tag]);
+    const segments = tag.split("/");
+    assert.equal(segments.length, 2);
+    assert.ok(DEFAULT_PKM_TAG_SET.has(segments[0]));
+    const lower = tag.toLowerCase();
+    assert.equal(seenLower.has(lower), false, `duplicate preset tag: ${tag}`);
+    seenLower.add(lower);
+  }
+
+  // Verify frontend static list matches backend list identically
+  const frontendSource = readFileSync(new URL("../../web/src/lib/default-tags.ts", import.meta.url), "utf8");
+  const match = frontendSource.match(/DEFAULT_PKM_PRESET_SECONDARY_TAGS_BY_ROOT[^=]*=\s*(\{[\s\S]*?\});/);
+  assert.ok(match);
+  const frontendMap = Function(`"use strict"; return (${match[1]});`)();
+  const frontendFullTags = Object.entries(frontendMap).flatMap(([root, subs]) => subs.map((sub) => `${root}/${sub}`));
+  assert.deepEqual(frontendFullTags, [...DEFAULT_PKM_SECONDARY_TAGS]);
+});
+
+test("deterministic validation enforces 12 roots, <=2 levels, max 1 new AI-coined secondary tag, treats preset tags as reuse, and preserves manual tags", async () => {
   env.AI = {
     async run() {
       return {
@@ -93,9 +118,9 @@ test("deterministic validation enforces 12 roots, <=2 levels, max 1 new secondar
             "技术/-bad",
             "0080ff",
             "技术/Cloudflare",
-            "项目/Memos",
+            "技术/自研引擎",
+            "项目/临时实验",
             "日常",
-            "工作",
           ],
         }),
       };
@@ -104,17 +129,18 @@ test("deterministic validation enforces 12 roots, <=2 levels, max 1 new secondar
 
   const res = await request("/api/v1/ai/suggestTags", {
     method: "POST",
-    ...asUser("alice", { content: "今天在 Cloudflare Workers 上调试 Memos 性能" }),
+    ...asUser("alice", { content: "今天在 Cloudflare Workers 上调试自研引擎并做临时实验" }),
   });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.source, "ai");
-  // "项目/Memos" is skipped because max 1 new secondary tag ("技术/Cloudflare") is allowed.
-  assert.deepEqual(body.tags, ["技术/Cloudflare", "日常", "工作"]);
+  // "技术/Cloudflare" is a preset -> reuse (does not consume new quota).
+  // "技术/自研引擎" is AI-coined -> new; "项目/临时实验" is skipped because max 1 new is allowed.
+  assert.deepEqual(body.tags, ["技术/Cloudflare", "技术/自研引擎", "日常"]);
   assert.deepEqual(body.suggestions, [
-    { tag: "技术/Cloudflare", mode: "new" },
+    { tag: "技术/Cloudflare", mode: "reuse" },
+    { tag: "技术/自研引擎", mode: "new" },
     { tag: "日常", mode: "primary" },
-    { tag: "工作", mode: "primary" },
   ]);
 
   // Manual tag capabilities remain completely unrestricted.
@@ -127,28 +153,30 @@ test("deterministic validation enforces 12 roots, <=2 levels, max 1 new secondar
   assert.deepEqual(manualMemo.tags, ["自定义一级/二级/三级"]);
 });
 
-test("normalizes case variants against user's real D1 tags while preserving hyphens", async () => {
+test("normalizes case variants against both preset and user D1 tags while preserving hyphens", async () => {
   await request("/api/v1/memos", {
     method: "POST",
-    ...asUser("alice", { content: "#技术/Cloudflare #技术/AI-工具 已有标签笔记", visibility: "PRIVATE" }),
+    ...asUser("alice", { content: "#技术/AI-工具 已有标签笔记", visibility: "PRIVATE" }),
   });
 
   env.AI = {
     async run() {
-      return { response: '<think>reasoning...</think>{"tags":[{"tag":"技术/cloudflare","action":"new"},{"tag":"技术/AI工具","action":"new"}]}' };
+      return {
+        response: '<think>reasoning...</think>{"tags":[{"tag":"技术/cloudflare","action":"new"},{"tag":"技术/Rust语言","action":"new"}]}',
+      };
     },
   };
 
   const res = await request("/api/v1/ai/suggestTags", {
     method: "POST",
-    ...asUser("alice", { content: "研究 Cloudflare Workers 和 AI 工具选型" }),
+    ...asUser("alice", { content: "研究 Cloudflare Workers 和 Rust 选型" }),
   });
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.deepEqual(body.tags, ["技术/Cloudflare", "技术/AI工具"]);
+  assert.deepEqual(body.tags, ["技术/Cloudflare", "技术/Rust语言"]);
   assert.deepEqual(body.suggestions, [
     { tag: "技术/Cloudflare", mode: "reuse" },
-    { tag: "技术/AI工具", mode: "new" },
+    { tag: "技术/Rust语言", mode: "new" },
   ]);
 });
 
@@ -195,8 +223,35 @@ test("queries user tags directly from D1 without 40-tag truncation and enforces 
   assert.deepEqual(body.tags, ["技术/Topic45"]);
   assert.deepEqual(body.suggestions, [{ tag: "技术/Topic45", mode: "reuse" }]);
   assert.ok(capturedUserPrompt.includes("技术/Topic45"));
+  assert.ok(capturedUserPrompt.includes("技术/Cloudflare"));
   assert.equal(capturedUserPrompt.includes("BobSecretProject"), false);
   assert.equal(capturedUserPrompt.includes("ArchivedOnly"), false);
+});
+
+test("prompt merges actual user tags and preset tags without duplicates", async () => {
+  await request("/api/v1/memos", {
+    method: "POST",
+    ...asUser("alice", { content: "#技术/Cloudflare #技术/自研网关 已有标签", visibility: "PRIVATE" }),
+  });
+
+  let capturedUserPrompt = "";
+  env.AI = {
+    async run(_model, input) {
+      capturedUserPrompt = input.messages[1].content;
+      return { response: '["技术/Cloudflare"]' };
+    },
+  };
+
+  const res = await request("/api/v1/ai/suggestTags", {
+    method: "POST",
+    ...asUser("alice", { content: "优化自研网关和 Cloudflare 路由" }),
+  });
+  assert.equal(res.status, 200);
+  const techLine = capturedUserPrompt.split("\n").find((line) => line.startsWith("- 技术"));
+  assert.ok(techLine);
+  assert.ok(techLine.includes("[已用: 技术/Cloudflare, 技术/自研网关]"));
+  assert.equal(techLine.match(/技术\/Cloudflare/g)?.length, 1);
+  assert.ok(techLine.includes("技术/Docker"));
 });
 
 test("when user already selected primary category, prompt locks it and provides its secondary tags", async () => {
@@ -220,7 +275,7 @@ test("when user already selected primary category, prompt locks it and provides 
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.deepEqual(body.tags, ["技术/Cloudflare"]);
-  assert.ok(capturedUserPrompt.includes("用户已选一级分类（保留勿替换，优先在该分类下选或提炼二级标签）: 技术"));
+  assert.ok(capturedUserPrompt.includes("用户已选一级分类（保留勿替换，优先在该分类下选择或补充二级标签）: 技术"));
   assert.ok(capturedUserPrompt.includes("技术/Cloudflare"));
   assert.equal(capturedUserPrompt.includes("项目/Memos"), false);
 });
@@ -484,7 +539,7 @@ test("simulated 36-note sequential cold-start classification verifies reuse grow
   let reuseCount = 0;
   let newCount = 0;
   let primaryCount = 0;
-  const discoveredSecondary = new Set();
+  const coinedNewTags = new Set();
 
   for (const content of samples) {
     const suggestRes = await request("/api/v1/ai/suggestTags", {
@@ -500,11 +555,10 @@ test("simulated 36-note sequential cold-start classification verifies reuse grow
 
     for (const item of suggestBody.suggestions) {
       if (item.mode === "new") {
-        assert.equal(discoveredSecondary.has(item.tag), false);
-        discoveredSecondary.add(item.tag);
+        assert.equal(coinedNewTags.has(item.tag), false);
+        coinedNewTags.add(item.tag);
         newCount++;
       } else if (item.mode === "reuse") {
-        assert.equal(discoveredSecondary.has(item.tag), true);
         reuseCount++;
       } else {
         primaryCount++;
@@ -519,8 +573,7 @@ test("simulated 36-note sequential cold-start classification verifies reuse grow
     assert.equal(saveRes.status, 201);
   }
 
-  assert.equal(newCount, discoveredSecondary.size);
-  assert.ok(reuseCount >= 18, `expected strong reuse across 36 notes, got ${reuseCount}`);
+  assert.equal(newCount, coinedNewTags.size);
+  assert.ok(reuseCount >= 25, `expected strong preset+real reuse across 36 notes, got ${reuseCount}`);
   assert.ok(primaryCount >= 5, `expected primary-only fallback for casual notes, got ${primaryCount}`);
-  assert.equal(discoveredSecondary.size, 10);
 });
