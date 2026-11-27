@@ -442,7 +442,7 @@
       "tag-suggestion-model": "文本模型",
       "tag-suggestion-model-help": "优先推荐中文理解与指令遵循能力较强的模型。",
       "tag-suggestion-invalid-saved": "当前已保存的模型 \"{{model}}\" 不在支持列表中，运行时将自动回退至默认模型。请保存更新。",
-      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct（默认 · 轻量快速）",
+      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct Fast（默认 · 轻量快速）",
       "tag-model-glm-4-7-flash": "GLM-4.7 Flash（中文强 · 快速）",
       "tag-model-qwen-3-8-27b": "Qwen 3.8 27B（中文语义与归类强）",
       "tag-model-llama-3-3-70b": "Llama 3.3 70B FP8 Fast（指令与 JSON 稳定）",

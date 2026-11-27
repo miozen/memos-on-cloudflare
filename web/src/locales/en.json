@@ -477,7 +477,7 @@
       "tag-suggestion-model": "Text model",
       "tag-suggestion-model-help": "Models with stronger Chinese understanding and instruction following produce more consistent secondary tags.",
       "tag-suggestion-invalid-saved": "Saved model \"{{model}}\" is unsupported and falls back to default at runtime. Save to update.",
-      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct (Default · Fast)",
+      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct Fast (Default · Fast)",
       "tag-model-glm-4-7-flash": "GLM-4.7 Flash (Strong Chinese · Fast)",
       "tag-model-qwen-3-8-27b": "Qwen 3.8 27B (Strong Chinese & Classification)",
       "tag-model-llama-3-3-70b": "Llama 3.3 70B FP8 Fast (Strong JSON & Instructions)",

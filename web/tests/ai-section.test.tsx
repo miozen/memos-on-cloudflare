@@ -94,7 +94,7 @@ describe("AISection", () => {
           value: expect.objectContaining({
             case: "aiSetting",
             value: expect.objectContaining({
-              tagSuggestion: { model: "@cf/meta/llama-3.1-8b-instruct" },
+              tagSuggestion: { model: "@cf/meta/llama-3.1-8b-instruct-fast" },
             }),
           }),
         }),

@@ -162,10 +162,46 @@ export function buildUserTagIndex(counts: Map<string, number>): UserTagIndex {
   return { counts, realTags, lowerToCanonical, secondaryByRoot };
 }
 
+function extractTextFromAiResult(result: unknown): string {
+  if (typeof result === "string") {
+    return result;
+  }
+  if (!result || typeof result !== "object") {
+    return "";
+  }
+
+  const obj = result as Record<string, unknown>;
+  if (typeof obj.response === "string") {
+    return obj.response;
+  }
+  if (obj.response && typeof obj.response === "object") {
+    return JSON.stringify(obj.response);
+  }
+
+  if (Array.isArray(obj.choices) && obj.choices.length > 0) {
+    const firstChoice = obj.choices[0] as Record<string, unknown> | undefined;
+    const message = firstChoice?.message as Record<string, unknown> | undefined;
+    if (typeof message?.content === "string" && message.content.trim()) {
+      return message.content;
+    }
+    if (typeof firstChoice?.text === "string" && firstChoice.text.trim()) {
+      return firstChoice.text;
+    }
+  }
+
+  if (obj.result && typeof obj.result === "object") {
+    return extractTextFromAiResult(obj.result);
+  }
+
+  return "";
+}
+
 function extractRawTagCandidatesFromAiText(rawText: string): string[] {
-  const withoutThinking = rawText.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  const objMatch = withoutThinking.match(/\{[\s\S]*\}/);
-  const arrMatch = withoutThinking.match(/\[[\s\S]*\]/);
+  const withoutThinking = rawText
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   const parseCandidateArray = (items: unknown[]): string[] => {
     const out: string[] = [];
@@ -179,26 +215,34 @@ function extractRawTagCandidatesFromAiText(rawText: string): string[] {
     return out;
   };
 
-  if (objMatch) {
+  const tryParseJson = (snippet: string): string[] | null => {
     try {
-      const parsed = JSON.parse(objMatch[0]) as { tags?: unknown };
-      if (Array.isArray(parsed?.tags)) {
-        return parseCandidateArray(parsed.tags);
-      }
-    } catch {
-      // Fall through to array extraction
-    }
-  }
-
-  if (arrMatch) {
-    try {
-      const parsed = JSON.parse(arrMatch[0]);
+      const parsed = JSON.parse(snippet) as unknown;
       if (Array.isArray(parsed)) {
         return parseCandidateArray(parsed);
       }
+      if (parsed && typeof parsed === "object" && Array.isArray((parsed as { tags?: unknown }).tags)) {
+        return parseCandidateArray((parsed as { tags: unknown[] }).tags);
+      }
     } catch {
-      return [];
+      return null;
     }
+    return null;
+  };
+
+  const direct = tryParseJson(withoutThinking);
+  if (direct) return direct;
+
+  const objMatch = withoutThinking.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    const parsedObj = tryParseJson(objMatch[0]);
+    if (parsedObj) return parsedObj;
+  }
+
+  const arrMatch = withoutThinking.match(/\[[\s\S]*\]/);
+  if (arrMatch) {
+    const parsedArr = tryParseJson(arrMatch[0]);
+    if (parsedArr) return parsedArr;
   }
 
   return [];
@@ -405,6 +449,8 @@ aiRoutes.post("/suggestTags", authRequired, async (c) => {
     console.warn(fallbackReason);
   }
 
+  let heuristicReason = !c.env.AI || typeof c.env.AI.run !== "function" ? "ai_binding_missing" : "";
+
   if (c.env.AI && typeof c.env.AI.run === "function") {
     try {
       const { systemPrompt, userPrompt } = buildTagSuggestionPrompts(content, contentTags, tagIndex);
@@ -413,25 +459,30 @@ aiRoutes.post("/suggestTags", authRequired, async (c) => {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: 200,
+        max_tokens: 1024,
         temperature: 0.15,
       });
 
-      const rawResult = result as unknown as { response?: unknown } | null;
-      const responseText = typeof rawResult?.response === "string" ? rawResult.response : "";
-      const rawCandidates = extractRawTagCandidatesFromAiText(responseText);
-      const suggestions = validateAndNormalizeTagSuggestions(rawCandidates, contentTags, tagIndex);
+      const responseText = extractTextFromAiResult(result);
+      if (!responseText.trim()) {
+        heuristicReason = "ai_empty_response";
+      } else {
+        const rawCandidates = extractRawTagCandidatesFromAiText(responseText);
+        const suggestions = validateAndNormalizeTagSuggestions(rawCandidates, contentTags, tagIndex);
 
-      if (suggestions.length > 0) {
-        return c.json({
-          tags: suggestions.map((item) => item.tag),
-          suggestions,
-          model,
-          source: "ai",
-        });
+        if (suggestions.length > 0) {
+          return c.json({
+            tags: suggestions.map((item) => item.tag),
+            suggestions,
+            model,
+            source: "ai",
+          });
+        }
+        heuristicReason = "ai_parse_or_validation_empty";
       }
     } catch (error) {
       console.warn("AI tag suggestion fell back to heuristics", error);
+      heuristicReason = `ai_error: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`;
     }
   }
 
@@ -441,5 +492,6 @@ aiRoutes.post("/suggestTags", authRequired, async (c) => {
     suggestions: heuristicSuggestions,
     model,
     source: "heuristic",
+    ...(heuristicReason ? { fallbackReason: heuristicReason } : {}),
   });
 });

@@ -270,6 +270,42 @@ test("Workers AI model setting persists via instance AI setting, takes effect im
   assert.equal(updatedBody.model, "@cf/zai-org/glm-4.7-flash");
   assert.equal(calledModels[1], "@cf/zai-org/glm-4.7-flash");
 
+  // Simulate legacy deprecated model -> auto-upgrades to -fast; and AI runtime throw falls back to heuristic with reason
+  sqlite
+    .prepare("UPDATE system_setting SET value = ? WHERE name = 'instance/settings/AI'")
+    .run(JSON.stringify({ tagSuggestion: { model: "@cf/meta/llama-3.1-8b-instruct" } }));
+
+  const legacyAliasRes = await request("/api/v1/ai/suggestTags", {
+    method: "POST",
+    ...asUser("alice", { content: "Cloudflare Workers 部署测试" }),
+  });
+  assert.equal(legacyAliasRes.status, 200);
+  assert.equal((await legacyAliasRes.json()).model, DEFAULT_TAG_SUGGESTION_MODEL);
+
+  // Supports OpenAI chat-completion choices format (used by GLM-4.7-Flash / Qwen 3.8)
+  env.AI = {
+    async run() {
+      return {
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: '{"tags":[{"tag":"技术/Cloudflare","action":"new"}]}',
+            },
+          },
+        ],
+      };
+    },
+  };
+  const choicesRes = await request("/api/v1/ai/suggestTags", {
+    method: "POST",
+    ...asUser("alice", { content: "排查 Cloudflare Workers 和 D1 性能" }),
+  });
+  assert.equal(choicesRes.status, 200);
+  const choicesBody = await choicesRes.json();
+  assert.equal(choicesBody.source, "ai");
+  assert.deepEqual(choicesBody.tags, ["技术/Cloudflare"]);
+
   // Simulate corrupted DB config -> safely falls back to default model, and AI runtime throw falls back to heuristic
   sqlite
     .prepare("UPDATE system_setting SET value = ? WHERE name = 'instance/settings/AI'")
@@ -290,8 +326,9 @@ test("Workers AI model setting persists via instance AI setting, takes effect im
   const fallbackBody = await fallbackRes.json();
   assert.equal(fallbackBody.model, DEFAULT_TAG_SUGGESTION_MODEL);
   assert.equal(fallbackBody.source, "heuristic");
+  assert.ok(fallbackBody.fallbackReason?.includes("Simulated Workers AI outage"));
   assert.ok(fallbackBody.tags.includes("技术"));
-  assert.equal(calledModels[2], DEFAULT_TAG_SUGGESTION_MODEL);
+  assert.equal(calledModels[3], DEFAULT_TAG_SUGGESTION_MODEL);
 
   // Saving memos still works cleanly even when AI fails
   const memoSaveRes = await request("/api/v1/memos", {

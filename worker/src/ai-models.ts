@@ -4,17 +4,21 @@ export interface WorkersAITextModelOption {
   description: string;
 }
 
-export const DEFAULT_TAG_SUGGESTION_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+export const DEFAULT_TAG_SUGGESTION_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+
+const LEGACY_MODEL_ALIASES: Record<string, string> = {
+  "@cf/meta/llama-3.1-8b-instruct": DEFAULT_TAG_SUGGESTION_MODEL,
+};
 
 /**
- * Curated Workers AI text generation models verified against Cloudflare Workers AI
- * official model documentation, keeping the existing Llama 3.1 8B model as default.
+ * Curated active Workers AI text generation models verified against Cloudflare Workers AI
+ * official model documentation.
  */
 export const WORKERS_AI_TAG_MODELS: readonly WorkersAITextModelOption[] = [
   {
-    id: "@cf/meta/llama-3.1-8b-instruct",
-    label: "Llama 3.1 8B Instruct (默认)",
-    description: "当前默认轻量模型，响应快、开销低。",
+    id: "@cf/meta/llama-3.1-8b-instruct-fast",
+    label: "Llama 3.1 8B Instruct Fast (默认)",
+    description: "轻量高速模型，响应快、开销低。",
   },
   {
     id: "@cf/zai-org/glm-4.7-flash",
@@ -60,8 +64,12 @@ export function resolveTagSuggestionModel(rawAiSettingValue?: string | null): {
     if (configured === undefined || configured === null || configured === "") {
       return { model: DEFAULT_TAG_SUGGESTION_MODEL };
     }
-    if (isSupportedTagSuggestionModel(configured)) {
-      return { model: configured.trim() };
+    if (typeof configured === "string") {
+      const trimmed = configured.trim();
+      const aliased = LEGACY_MODEL_ALIASES[trimmed] ?? trimmed;
+      if (isSupportedTagSuggestionModel(aliased)) {
+        return { model: aliased };
+      }
     }
     return {
       model: DEFAULT_TAG_SUGGESTION_MODEL,

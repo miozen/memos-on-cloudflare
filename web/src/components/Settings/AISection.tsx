@@ -21,11 +21,15 @@ interface CloudflareAIConfig {
 }
 
 const DEFAULT_TRANSCRIPTION_MODEL = "@cf/openai/whisper";
-const DEFAULT_TAG_SUGGESTION_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const DEFAULT_TAG_SUGGESTION_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+
+const LEGACY_TAG_MODEL_ALIASES: Record<string, string> = {
+  "@cf/meta/llama-3.1-8b-instruct": DEFAULT_TAG_SUGGESTION_MODEL,
+};
 
 const WORKERS_AI_TAG_MODELS = [
   {
-    id: "@cf/meta/llama-3.1-8b-instruct",
+    id: "@cf/meta/llama-3.1-8b-instruct-fast",
     labelKey: "setting.ai.tag-model-llama-3-1-8b",
   },
   {
@@ -59,14 +63,15 @@ function deriveConfig(aiSetting: unknown): { config: CloudflareAIConfig; invalid
   const hasProvider = (setting?.providers || []).length > 0;
   const transcription = setting?.transcription;
   const rawTagModel = setting?.tagSuggestion?.model;
-  const isTagModelValid = !rawTagModel || SUPPORTED_TAG_MODEL_IDS.has(rawTagModel);
+  const normalizedTagModel = rawTagModel ? (LEGACY_TAG_MODEL_ALIASES[rawTagModel] ?? rawTagModel) : undefined;
+  const isTagModelValid = !normalizedTagModel || SUPPORTED_TAG_MODEL_IDS.has(normalizedTagModel);
 
   return {
     config: {
       enabled: hasProvider,
       transcriptionModel: transcription?.model || DEFAULT_TRANSCRIPTION_MODEL,
       transcriptionLanguage: transcription?.language || "",
-      tagSuggestionModel: isTagModelValid && rawTagModel ? rawTagModel : DEFAULT_TAG_SUGGESTION_MODEL,
+      tagSuggestionModel: isTagModelValid && normalizedTagModel ? normalizedTagModel : DEFAULT_TAG_SUGGESTION_MODEL,
     },
     invalidSavedTagModel: rawTagModel && !isTagModelValid ? rawTagModel : undefined,
   };
