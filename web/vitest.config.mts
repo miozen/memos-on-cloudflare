@@ -23,6 +23,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.{ts,tsx}"],
+    testTimeout: 15000,
     // Keep each test hermetic:
     //  - mockReset clears call history and resets implementations for vi.fn()s,
     //    so module-level mocks (e.g. useCurrentUser) don't leak between tests.

@@ -9,7 +9,9 @@ import { findUserByUsername, findUserById, createUser, countUsers } from "../db/
 import type { UserRow } from "../db/user";
 import * as settingDB from "../db/setting";
 import { createErrorBody } from "../error";
+import { deleteCachedKeys } from "../cache";
 import { extractIdentityProviderUid } from "../idp";
+import { isUniqueConstraintError } from "../validation";
 import { formatUser } from "./users";
 
 type AuthApp = { Bindings: Env; Variables: { user: UserPayload } };
@@ -39,8 +41,8 @@ function setSessionCookies(c: any, refreshToken: string) {
 }
 
 function clearSessionCookies(c: any) {
-  deleteCookie(c, REFRESH_COOKIE_NAME, { path: SESSION_COOKIE_PATH });
-  deleteCookie(c, SESSION_HINT_COOKIE_NAME, { path: SESSION_COOKIE_PATH });
+  deleteCookie(c, REFRESH_COOKIE_NAME, SESSION_COOKIE_OPTIONS);
+  deleteCookie(c, SESSION_HINT_COOKIE_NAME, SESSION_COOKIE_OPTIONS);
 }
 
 const getGeneralSetting = async (db: D1Database) => {
@@ -139,6 +141,8 @@ authRoutes.post("/signin", async (c) => {
       await c.env.DB.prepare(
         "INSERT INTO user_identity (user_id, provider, extern_uid) VALUES (?, ?, ?)"
       ).bind(user!.id, idpUid, oauthUser.identifier).run();
+
+      await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
     }
 
     if (!user) {
@@ -241,7 +245,15 @@ authRoutes.post("/signup", async (c) => {
   }
 
   const passwordHash = await hashPassword(password);
-  const user = await createUser(c.env.DB, { username, passwordHash, role });
+  let user: UserRow;
+  try {
+    user = await createUser(c.env.DB, { username, passwordHash, role });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: "Username already taken" }, 409);
+    }
+    throw error;
+  }
 
   const userPayload: UserPayload = {
     id: user.id,
@@ -255,6 +267,7 @@ authRoutes.post("/signup", async (c) => {
   const { token: refreshToken } = await createRefreshToken(userPayload, tokenId, c.env.JWT_SECRET);
 
   setSessionCookies(c, refreshToken);
+  await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
 
   const formattedUser = formatUser(user as UserRow, { includeEmail: true });
 

@@ -7,6 +7,8 @@ type AIApp = { Bindings: Env; Variables: { user: UserPayload } };
 
 export const aiRoutes = new Hono<AIApp>();
 
+const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024;
+
 aiRoutes.post("/transcribe", authRequired, async (c) => {
   const contentType = c.req.header("content-type") || "";
 
@@ -20,7 +22,13 @@ aiRoutes.post("/transcribe", authRequired, async (c) => {
     const formData = await c.req.formData();
     const file = formData.get("file") as File | null;
     if (!file) return c.json({ error: "No audio file provided" }, 400);
+    if (file.size > MAX_AUDIO_SIZE_BYTES) {
+      return c.json({ error: "Audio file exceeds the 25MB limit" }, 413);
+    }
     audioData = await file.arrayBuffer();
+    if (audioData.byteLength > MAX_AUDIO_SIZE_BYTES) {
+      return c.json({ error: "Audio file exceeds the 25MB limit" }, 413);
+    }
     requestedLanguage = String(formData.get("language") || "");
   } else {
     return c.json({ error: "Expected multipart/form-data" }, 400);

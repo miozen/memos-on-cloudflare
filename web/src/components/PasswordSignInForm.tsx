@@ -1,6 +1,6 @@
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { LoaderIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { setAccessToken } from "@/auth-state";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ function PasswordSignInForm({ redirectPath }: PasswordSignInFormProps) {
   const { profile } = useInstance();
   const { initialize } = useAuth();
   const actionBtnLoadingState = useLoading(false);
+  const submittingRef = useRef(false);
   const [username, setUsername] = useState(profile.demo ? "demo" : "");
   const [password, setPassword] = useState(profile.demo ? "secret" : "");
 
@@ -47,10 +48,11 @@ function PasswordSignInForm({ redirectPath }: PasswordSignInFormProps) {
       return;
     }
 
-    if (actionBtnLoadingState.isLoading) {
+    if (submittingRef.current || actionBtnLoadingState.isLoading) {
       return;
     }
 
+    submittingRef.current = true;
     try {
       actionBtnLoadingState.setLoading();
       const response = await authServiceClient.signIn({
@@ -69,8 +71,10 @@ function PasswordSignInForm({ redirectPath }: PasswordSignInFormProps) {
       handleError(error, toast.error, {
         fallbackMessage: "Failed to sign in.",
       });
+    } finally {
+      submittingRef.current = false;
+      actionBtnLoadingState.setFinish();
     }
-    actionBtnLoadingState.setFinish();
   };
 
   return (
@@ -108,7 +112,7 @@ function PasswordSignInForm({ redirectPath }: PasswordSignInFormProps) {
         </div>
       </div>
       <div className="flex flex-row justify-end items-center w-full mt-6">
-        <Button type="submit" className="w-full h-10" disabled={actionBtnLoadingState.isLoading} onClick={handleSignInButtonClick}>
+        <Button type="submit" className="w-full h-10" disabled={actionBtnLoadingState.isLoading}>
           {t("common.sign-in")}
           {actionBtnLoadingState.isLoading && <LoaderIcon className="w-5 h-auto ml-2 animate-spin opacity-60" />}
         </Button>

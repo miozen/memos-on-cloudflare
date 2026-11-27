@@ -156,7 +156,7 @@ instanceRoutes.get("/settings/*", authOptional, async (c) => {
 });
 
 // Test email setting via Resend (admin only)
-instanceRoutes.post("/settings/notification\\:testEmail", authRequired, async (c) => {
+instanceRoutes.post("/settings/notification:testEmail", authRequired, async (c) => {
   const currentUser = c.get("user");
   if (currentUser.role !== "ADMIN") {
     return c.json({ error: "Admin only" }, 403);

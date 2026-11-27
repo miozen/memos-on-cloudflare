@@ -1185,11 +1185,15 @@ memoRoutes.post("/:id/reactions", authRequired, async (c) => {
     return c.json({ error: getMemoReadErrorMessage(deniedStatus) }, deniedStatus);
   }
 
-  const body = await c.req.json<{ reactionType: string }>();
+  const body = await c.req.json<{ reactionType?: unknown }>();
+  const reactionType = typeof body.reactionType === "string" ? body.reactionType.trim() : "";
+  if (!reactionType) {
+    return c.json({ error: "reactionType is required" }, 400);
+  }
   const reaction = await reactionDB.upsertReaction(c.env.DB, {
     creatorId: user.id,
     contentId: memo.uid,
-    reactionType: body.reactionType,
+    reactionType,
   });
   return c.json(formatReaction(reaction, user.username));
 });
@@ -1311,14 +1315,14 @@ memoRoutes.get("/shares/:token", async (c) => {
 });
 
 // --- Link metadata ---
-memoRoutes.get("/-/linkMetadata", async (c) => {
+memoRoutes.get("/-/linkMetadata", authRequired, async (c) => {
   const url = normalizeLinkMetadataUrl(c.req.query("url"));
   if (!url) return c.json({ error: "URL required" }, 400);
 
   return c.json(await getLinkMetadata(c.env, url));
 });
 
-memoRoutes.post("/-/linkMetadata\\:batchGet", async (c) => {
+memoRoutes.post("/-/linkMetadata:batchGet", authRequired, async (c) => {
   const body = await c.req.json<{ urls: string[] }>();
   const urls = (body.urls || []).slice(0, MAX_LINK_METADATA_BATCH_SIZE);
 

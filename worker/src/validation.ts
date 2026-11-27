@@ -78,6 +78,11 @@ export function normalizeUserRoleInput(value: unknown): "ADMIN" | "USER" | undef
   return undefined;
 }
 
+export function isUniqueConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("UNIQUE constraint failed") || message.includes("SQLITE_CONSTRAINT_UNIQUE");
+}
+
 export function extractMentionUsernames(content: string): string[] {
   if (!content) {
     return [];

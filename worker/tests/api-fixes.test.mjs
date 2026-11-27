@@ -282,3 +282,133 @@ test("creates MEMO_MENTION inbox notifications and triggers Resend email without
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS c FROM inbox WHERE receiver_id = 3").get().c, 1);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS c FROM inbox WHERE receiver_id = 4").get().c, 1);
 });
+
+test("reports clear error when JWT_SECRET is missing and handles duplicate signup race as 409", async () => {
+  await assert.rejects(
+    () => createAccessToken({ id: 1, username: "admin", role: "ADMIN", status: "NORMAL" }, ""),
+    /JWT_SECRET/,
+  );
+
+  // Concurrent first-user POST /api/v1/users requests must never throw 500 on UNIQUE constraint.
+  sqlite.exec("DELETE FROM user");
+  const [res1, res2] = await Promise.all([
+    request("/api/v1/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "firstadmin", password: "password123" }),
+    }),
+    request("/api/v1/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "firstadmin", password: "password123" }),
+    }),
+  ]);
+
+  const statuses = [res1.status, res2.status].sort((a, b) => a - b);
+  assert.deepEqual(statuses, [201, 409]);
+});
+
+test("blocks internal keys on generic user settings, prevents deleting last admin, and protects linkMetadata", async () => {
+  const pat = "memos_pat_secret_hash_test";
+  sqlite.prepare("INSERT INTO user_setting (user_id, key, value) VALUES (?, 'personal_access_tokens', ?)")
+    .run(2, JSON.stringify([{ hash: await hashPAT(pat), description: "secret", expiresAt: null }]));
+  sqlite.prepare("INSERT INTO user_setting (user_id, key, value) VALUES (?, 'shortcuts', ?)")
+    .run(2, JSON.stringify([{ id: "s1", title: "Work", filter: "tag == 'work'" }]));
+  sqlite.prepare("INSERT INTO user_setting (user_id, key, value) VALUES (?, 'general', ?)")
+    .run(2, JSON.stringify({ locale: "zh-Hans" }));
+
+  const listRes = await request("/api/v1/users/alice/settings", asUser("alice"));
+  assert.equal(listRes.status, 200);
+  const { settings } = await listRes.json();
+  assert.deepEqual(settings.map((s) => s.key), ["general"]);
+
+  assert.equal((await request("/api/v1/users/alice/settings/personal_access_tokens", asUser("admin"))).status, 403);
+  assert.equal((await request("/api/v1/users/alice/settings/shortcuts", { method: "PATCH", ...asUser("alice", { value: { x: 1 } }) })).status, 403);
+  assert.equal((await request("/api/v1/users/alice/settings/general", { method: "PATCH", ...asUser("alice", { value: "{bad-json" }) })).status, 400);
+
+  // Last active admin cannot be deleted, archived, or demoted.
+  assert.equal((await request("/api/v1/users/admin", { method: "DELETE", ...asUser("admin") })).status, 400);
+  assert.equal((await request("/api/v1/users/admin", { method: "PATCH", ...asUser("admin", { rowStatus: "ARCHIVED" }) })).status, 400);
+  assert.equal((await request("/api/v1/users/admin", { method: "PATCH", ...asUser("admin", { role: "USER" }) })).status, 400);
+
+  // Link metadata requires authentication.
+  assert.equal((await request("/api/v1/memos/-/linkMetadata?url=https://example.com")).status, 401);
+  assert.equal((await request("/api/v1/memos/-/linkMetadata:batchGet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: ["https://example.com"] }),
+  })).status, 401);
+
+  // Colon action routes must match (not 404 due to escaped colon).
+  assert.equal((await request("/api/v1/instance/settings/notification:testEmail", {
+    method: "POST",
+    ...asUser("admin", {}),
+  })).status, 400);
+});
+
+test("serves base64 data image avatars safely without 500 and validates reactions, linked identities, AI size, and signup cache", async () => {
+  const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  sqlite.prepare("UPDATE user SET avatar_url = ? WHERE id = 2").run(pngDataUrl);
+  const pngRes = await request("/file/users/alice/avatar");
+  assert.equal(pngRes.status, 200);
+  assert.equal(pngRes.headers.get("Content-Type"), "image/png");
+  assert.equal(pngRes.headers.get("X-Content-Type-Options"), "nosniff");
+
+  // SVG data URI and invalid URLs fall back safely to default avatar SVG instead of throwing 500.
+  sqlite.prepare("UPDATE user SET avatar_url = ? WHERE id = 3").run("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=");
+  const svgFallback = await request("/file/users/bob/avatar");
+  assert.equal(svgFallback.status, 200);
+  assert.equal(svgFallback.headers.get("Content-Type"), "image/svg+xml");
+
+  sqlite.prepare("UPDATE user SET avatar_url = ? WHERE id = 4").run("https://cdn.example.com/avatar.png");
+  const redirectRes = await request("/file/users/charlie/avatar");
+  assert.equal(redirectRes.status, 302);
+  assert.equal(redirectRes.headers.get("Location"), "https://cdn.example.com/avatar.png");
+
+  // Reaction validation
+  const memoRes = await request("/api/v1/memos", { method: "POST", ...asUser("alice", { content: "hi", visibility: "PUBLIC" }) });
+  const memoUid = (await memoRes.json()).name.replace("memos/", "");
+  assert.equal((await request(`/api/v1/memos/${memoUid}/reactions`, { method: "POST", ...asUser("bob", { reactionType: "   " }) })).status, 400);
+
+  // Duplicate provider link for same user returns 409
+  sqlite.exec("INSERT INTO idp (uid, name, type, config) VALUES ('github', 'GitHub', 'oauth2', '{\"clientId\":\"c\",\"clientSecret\":\"s\",\"authUrl\":\"https://a\",\"tokenUrl\":\"https://t\",\"userInfoUrl\":\"https://u\",\"fieldMapping\":{\"identifier\":\"id\"}}')");
+  sqlite.exec("INSERT INTO user_identity (user_id, provider, extern_uid) VALUES (2, 'github', 'ext-1')");
+  globalThis.fetch = async (url) => {
+    if (String(url) === "https://t") {
+      return new Response(JSON.stringify({ access_token: "tok" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: "ext-2" }), { status: 200 });
+  };
+  const dupProviderRes = await request("/api/v1/users/alice/linkedIdentities", {
+    method: "POST",
+    ...asUser("alice", { idpName: "identity-providers/github", code: "abc", redirectUri: "https://memos.test/auth/callback" }),
+  });
+  assert.equal(dupProviderRes.status, 409);
+
+  // AI audio size guard (simulated via oversized File size check is tested with 413 if >25MB; check endpoint missing AI binding or 400)
+  env.AI = { async run() { return { text: "ok" }; } };
+  const bigBytes = new Uint8Array(25 * 1024 * 1024 + 1);
+  const aiForm = new FormData();
+  aiForm.append("file", new File([bigBytes], "huge.wav", { type: "audio/wav" }));
+  const aiRes = await request("/api/v1/ai/transcribe", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokens.alice}` },
+    body: aiForm,
+  });
+  assert.equal(aiRes.status, 413);
+
+  // Signup invalidates instance:profile KV cache
+  const deletedKeys = [];
+  env.CACHE = {
+    async get() { return null; },
+    async put() {},
+    async delete(k) { deletedKeys.push(k); },
+  };
+  const signupRes = await request("/api/v1/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "newcomer", password: "password123" }),
+  });
+  assert.equal(signupRes.status, 200);
+  assert.ok(deletedKeys.includes("cfmemos:v1:instance:profile"));
+});

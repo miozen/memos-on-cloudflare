@@ -8,6 +8,9 @@ const ACCESS_TTL = 15 * 60;
 const REFRESH_TTL = 30 * 24 * 60 * 60;
 
 function getSecretKey(secret: string): Uint8Array {
+  if (typeof secret !== "string" || !secret.trim()) {
+    throw new Error("Server misconfiguration: JWT_SECRET secret is not configured");
+  }
   return new TextEncoder().encode(secret);
 }
 

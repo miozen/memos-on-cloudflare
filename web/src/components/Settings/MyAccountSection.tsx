@@ -10,6 +10,7 @@ import { useDialog } from "@/hooks/useDialog";
 import useNavigateTo from "@/hooks/useNavigateTo";
 import { handleError } from "@/lib/error";
 import { ROUTES } from "@/router/routes";
+import { User_Role } from "@/types/proto/api/v1/user_service_pb";
 import { useTranslate } from "@/utils/i18n";
 import ChangeMemberPasswordDialog from "../ChangeMemberPasswordDialog";
 import UpdateAccountDialog from "../UpdateAccountDialog";
@@ -27,6 +28,7 @@ const MyAccountSection = () => {
   const accountDialog = useDialog();
   const passwordDialog = useDialog();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const isAdmin = user?.role === User_Role.ADMIN;
 
   const handleDeleteAccount = async () => {
     if (!user?.name) {
@@ -72,24 +74,26 @@ const MyAccountSection = () => {
 
       <AccessTokenSection />
 
-      <SettingGroup showSeparator title={t("setting.account.danger-area")} description={t("setting.account.danger-area-description")}>
-        <div className="flex flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
-          <div className="flex items-start gap-3">
-            <div className="rounded-full bg-destructive/10 p-2 text-destructive">
-              <AlertTriangleIcon className="h-4 w-4" />
+      {isAdmin && (
+        <SettingGroup showSeparator title={t("setting.account.danger-area")} description={t("setting.account.danger-area-description")}>
+          <div className="flex flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-destructive/10 p-2 text-destructive">
+                <AlertTriangleIcon className="h-4 w-4" />
+              </div>
+              <div className="flex-1 space-y-1">
+                <p className="text-sm font-medium text-foreground">{t("setting.account.delete-account")}</p>
+                <p className="text-sm text-muted-foreground">{t("setting.account.delete-account-description")}</p>
+              </div>
             </div>
-            <div className="flex-1 space-y-1">
-              <p className="text-sm font-medium text-foreground">{t("setting.account.delete-account")}</p>
-              <p className="text-sm text-muted-foreground">{t("setting.account.delete-account-description")}</p>
+            <div className="flex justify-end">
+              <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+                {t("setting.account.delete-account")}
+              </Button>
             </div>
           </div>
-          <div className="flex justify-end">
-            <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
-              {t("setting.account.delete-account")}
-            </Button>
-          </div>
-        </div>
-      </SettingGroup>
+        </SettingGroup>
+      )}
 
       {/* Update Account Dialog */}
       <UpdateAccountDialog open={accountDialog.isOpen} onOpenChange={accountDialog.setOpen} />
@@ -97,16 +101,18 @@ const MyAccountSection = () => {
       {/* Change Password Dialog */}
       <ChangeMemberPasswordDialog open={passwordDialog.isOpen} onOpenChange={passwordDialog.setOpen} user={user} />
 
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={user ? t("setting.member.delete-warning", { username: user.username }) : ""}
-        description={t("setting.member.delete-warning-description")}
-        confirmLabel={t("common.delete")}
-        cancelLabel={t("common.cancel")}
-        onConfirm={handleDeleteAccount}
-        confirmVariant="destructive"
-      />
+      {isAdmin && (
+        <ConfirmDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title={user ? t("setting.member.delete-warning", { username: user.username }) : ""}
+          description={t("setting.member.delete-warning-description")}
+          confirmLabel={t("common.delete")}
+          cancelLabel={t("common.cancel")}
+          onConfirm={handleDeleteAccount}
+          confirmVariant="destructive"
+        />
+      )}
     </SettingSection>
   );
 };

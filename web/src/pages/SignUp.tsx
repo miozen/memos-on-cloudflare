@@ -1,7 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { LoaderIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Link, useSearchParams } from "react-router-dom";
 import { setAccessToken } from "@/auth-state";
@@ -23,6 +23,7 @@ const SignUp = () => {
   const t = useTranslate();
   const navigateTo = useNavigateTo();
   const actionBtnLoadingState = useLoading(false);
+  const submittingRef = useRef(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const { initialize: initAuth } = useAuth();
@@ -52,10 +53,11 @@ const SignUp = () => {
       return;
     }
 
-    if (actionBtnLoadingState.isLoading) {
+    if (submittingRef.current || actionBtnLoadingState.isLoading) {
       return;
     }
 
+    submittingRef.current = true;
     try {
       actionBtnLoadingState.setLoading();
       const user = create(UserSchema, {
@@ -83,8 +85,10 @@ const SignUp = () => {
       handleError(error, toast.error, {
         fallbackMessage: "Sign up failed",
       });
+    } finally {
+      submittingRef.current = false;
+      actionBtnLoadingState.setFinish();
     }
-    actionBtnLoadingState.setFinish();
   };
 
   return (
@@ -131,7 +135,7 @@ const SignUp = () => {
                 </div>
               </div>
               <div className="flex flex-row justify-end items-center w-full mt-6">
-                <Button type="submit" className="w-full h-10" disabled={actionBtnLoadingState.isLoading} onClick={handleSignUpButtonClick}>
+                <Button type="submit" className="w-full h-10" disabled={actionBtnLoadingState.isLoading}>
                   {t("common.sign-up")}
                   {actionBtnLoadingState.isLoading && <LoaderIcon className="w-5 h-auto ml-2 animate-spin opacity-60" />}
                 </Button>

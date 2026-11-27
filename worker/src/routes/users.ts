@@ -12,7 +12,7 @@ import { createErrorBody } from "../error";
 import { buildIdentityProviderName, extractIdentityProviderUid } from "../idp";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
 import { getWebhookUrlValidationError, normalizeWebhookUrl } from "../webhook";
-import { chunkValues, createPlaceholders, normalizeUserRoleInput, safeJsonParse } from "../validation";
+import { chunkValues, createPlaceholders, isUniqueConstraintError, normalizeUserRoleInput, safeJsonParse } from "../validation";
 
 type UserApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -65,6 +65,14 @@ function formatPersonalAccessToken(username: string, token: {
 }
 
 const USER_STATS_CACHE_SCOPES = ["public", "authenticated", "owner"] as const;
+const INTERNAL_USER_SETTING_KEYS = new Set(["personal_access_tokens", "shortcuts"]);
+
+async function countActiveAdmins(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) as count FROM user WHERE role = 'ADMIN' AND row_status = 'NORMAL'")
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
 
 function getUserStatsCacheKeys(username: string) {
   return [
@@ -217,6 +225,20 @@ userRoutes.get("/:action", authOptional, async (c) => {
 });
 
 // Create user (admin, or self-registration when allowed)
+async function insertUserHandlingConflict(
+  db: D1Database,
+  data: { username: string; passwordHash: string; role: string },
+): Promise<{ user: userDB.UserRow } | { conflict: true }> {
+  try {
+    return { user: await userDB.createUser(db, data) };
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return { conflict: true };
+    }
+    throw error;
+  }
+}
+
 userRoutes.post("/", async (c) => {
   const userCount = await userDB.countUsers(c.env.DB);
 
@@ -235,9 +257,12 @@ userRoutes.post("/", async (c) => {
     }
 
     const passwordHash = await hashPassword(password);
-    const user = await userDB.createUser(c.env.DB, { username, passwordHash, role: "ADMIN" });
+    const created = await insertUserHandlingConflict(c.env.DB, { username, passwordHash, role: "ADMIN" });
+    if ("conflict" in created) {
+      return c.json({ error: "Username taken" }, 409);
+    }
     await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
-    return c.json(formatUser(user, { includeEmail: true }), 201);
+    return c.json(formatUser(created.user, { includeEmail: true }), 201);
   }
 
   // Check if self-registration is allowed
@@ -276,10 +301,13 @@ userRoutes.post("/", async (c) => {
   }
   const role = isAdmin && requestedRole === "ADMIN" ? "ADMIN" : "USER";
   const passwordHash = await hashPassword(password);
-  const user = await userDB.createUser(c.env.DB, { username, passwordHash, role });
+  const created = await insertUserHandlingConflict(c.env.DB, { username, passwordHash, role });
+  if ("conflict" in created) {
+    return c.json({ error: "Username taken" }, 409);
+  }
   await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
 
-  return c.json(formatUser(user, { includeEmail: true }), 201);
+  return c.json(formatUser(created.user, { includeEmail: true }), 201);
 });
 
 // Update user
@@ -303,6 +331,11 @@ userRoutes.patch("/:username", authRequired, async (c) => {
     }
     if (body.rowStatus !== "NORMAL" && body.rowStatus !== "ARCHIVED") {
       return c.json({ error: "Invalid user status" }, 400);
+    }
+    if (body.rowStatus === "ARCHIVED" && user.role === "ADMIN" && user.row_status === "NORMAL") {
+      if ((await countActiveAdmins(c.env.DB)) <= 1) {
+        return c.json({ error: "Cannot archive the last active administrator" }, 400);
+      }
     }
     updateData.row_status = body.rowStatus;
   }
@@ -328,6 +361,11 @@ userRoutes.patch("/:username", authRequired, async (c) => {
     const normalizedRole = normalizeUserRoleInput(body.role);
     if (!normalizedRole) {
       return c.json({ error: "Invalid user role" }, 400);
+    }
+    if (normalizedRole === "USER" && user.role === "ADMIN" && user.row_status === "NORMAL") {
+      if ((await countActiveAdmins(c.env.DB)) <= 1) {
+        return c.json({ error: "Cannot demote the last active administrator" }, 400);
+      }
     }
     updateData.role = normalizedRole;
   }
@@ -378,6 +416,12 @@ userRoutes.delete("/:username", authRequired, async (c) => {
 
   const user = await userDB.findUserByUsername(c.env.DB, username);
   if (!user) return c.json({ error: "User not found" }, 404);
+
+  if (user.role === "ADMIN" && user.row_status === "NORMAL") {
+    if ((await countActiveAdmins(c.env.DB)) <= 1) {
+      return c.json({ error: "Cannot delete the last active administrator" }, 400);
+    }
+  }
 
   const { results: userMemos } = await c.env.DB.prepare(
     "SELECT id, uid FROM memo WHERE creator_id = ?"
@@ -449,13 +493,18 @@ userRoutes.get("/:username/settings", authRequired, async (c) => {
     return c.json({ error: "Permission denied" }, 403);
   }
 
-  const settings = await settingDB.listUserSettings(c.env.DB, user.id);
+  const settings = (await settingDB.listUserSettings(c.env.DB, user.id)).filter(
+    (setting) => !INTERNAL_USER_SETTING_KEYS.has(setting.key),
+  );
   return c.json({ settings });
 });
 
 userRoutes.get("/:username/settings/:key", authRequired, async (c) => {
   const username = c.req.param("username");
   const key = c.req.param("key");
+  if (INTERNAL_USER_SETTING_KEYS.has(key)) {
+    return c.json({ error: "This setting must be accessed via its dedicated endpoint" }, 403);
+  }
   const currentUser = c.get("user");
   const user = await userDB.findUserByUsername(c.env.DB, username);
   if (!user) return c.json({ error: "User not found" }, 404);
@@ -470,6 +519,9 @@ userRoutes.get("/:username/settings/:key", authRequired, async (c) => {
 userRoutes.patch("/:username/settings/:key", authRequired, async (c) => {
   const username = c.req.param("username");
   const key = c.req.param("key");
+  if (INTERNAL_USER_SETTING_KEYS.has(key)) {
+    return c.json({ error: "This setting must be updated via its dedicated endpoint" }, 403);
+  }
   const currentUser = c.get("user");
   const user = await userDB.findUserByUsername(c.env.DB, username);
   if (!user) return c.json({ error: "User not found" }, 404);
@@ -477,18 +529,33 @@ userRoutes.patch("/:username/settings/:key", authRequired, async (c) => {
     return c.json({ error: "Permission denied" }, 403);
   }
 
-  const body = await c.req.json<{ value: any }>();
-  const newValue = typeof body.value === "string" ? JSON.parse(body.value) : (body.value || {});
+  const body = await c.req.json<{ value: unknown }>();
+  let newValue: unknown;
+  if (typeof body.value === "string") {
+    try {
+      newValue = JSON.parse(body.value);
+    } catch {
+      return c.json({ error: "Invalid JSON setting value" }, 400);
+    }
+  } else {
+    newValue = body.value ?? {};
+  }
+
+  if (typeof newValue !== "object" || newValue === null || Array.isArray(newValue)) {
+    return c.json({ error: "Setting value must be a JSON object" }, 400);
+  }
 
   // Merge with existing setting value
   const existing = await settingDB.getUserSetting(c.env.DB, user.id, key);
-  let merged = newValue;
+  let merged = newValue as Record<string, unknown>;
   if (existing) {
     try {
       const existingValue = JSON.parse(existing.value);
-      merged = { ...existingValue, ...newValue };
+      if (typeof existingValue === "object" && existingValue !== null && !Array.isArray(existingValue)) {
+        merged = { ...existingValue, ...(newValue as Record<string, unknown>) };
+      }
     } catch {
-      merged = newValue;
+      merged = newValue as Record<string, unknown>;
     }
   }
 
@@ -636,15 +703,23 @@ userRoutes.post("/:username/linkedIdentities", authRequired, async (c) => {
   }
 
   const existing = await c.env.DB.prepare(
-    "SELECT id FROM user_identity WHERE provider = ? AND extern_uid = ?"
-  ).bind(idpUid, oauthUser.identifier).first<{ id: number }>();
+    "SELECT id FROM user_identity WHERE (provider = ? AND extern_uid = ?) OR (user_id = ? AND provider = ?)"
+  ).bind(idpUid, oauthUser.identifier, user.id, idpUid).first<{ id: number }>();
   if (existing) {
-    return c.json({ error: "This identity is already linked to another account" }, 409);
+    return c.json({ error: "This identity or provider is already linked" }, 409);
   }
 
-  const result = await c.env.DB.prepare(
-    "INSERT INTO user_identity (user_id, provider, extern_uid) VALUES (?, ?, ?) RETURNING *"
-  ).bind(user.id, idpUid, oauthUser.identifier).first<{ id: number; provider: string; extern_uid: string }>();
+  let result: { id: number; provider: string; extern_uid: string } | null = null;
+  try {
+    result = await c.env.DB.prepare(
+      "INSERT INTO user_identity (user_id, provider, extern_uid) VALUES (?, ?, ?) RETURNING *"
+    ).bind(user.id, idpUid, oauthUser.identifier).first<{ id: number; provider: string; extern_uid: string }>();
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: "This identity or provider is already linked" }, 409);
+    }
+    throw error;
+  }
 
   return c.json({
     name: `users/${username}/linkedIdentities/${result!.id}`,

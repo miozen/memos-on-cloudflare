@@ -199,6 +199,52 @@ fileRoutes.get("/attachments/:uid/:filename", authOptional, async (c) => {
   return new Response(r2Object.body, { status: 200, headers });
 });
 
+const SAFE_AVATAR_DATA_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+]);
+
+function renderDefaultAvatarResponse() {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="50" fill="#e2e8f0"/>
+      <circle cx="50" cy="35" r="18" fill="#94a3b8"/>
+      <ellipse cx="50" cy="85" rx="30" ry="25" fill="#94a3b8"/>
+    </svg>`;
+  return new Response(svg, {
+    headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600" },
+  });
+}
+
+function parseSafeAvatarDataUrl(rawUrl: string): { contentType: string; bytes: Uint8Array } | undefined {
+  const match = rawUrl.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) {
+    return undefined;
+  }
+
+  const contentType = match[1].toLowerCase();
+  if (!SAFE_AVATAR_DATA_IMAGE_TYPES.has(contentType)) {
+    return undefined;
+  }
+
+  try {
+    const binary = atob(match[2].replace(/\s+/g, ""));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return { contentType: contentType === "image/jpg" ? "image/jpeg" : contentType, bytes };
+  } catch {
+    return undefined;
+  }
+}
+
 // Serve user avatar
 fileRoutes.get("/users/:identifier/avatar", async (c) => {
   const identifier = c.req.param("identifier");
@@ -208,15 +254,7 @@ fileRoutes.get("/users/:identifier/avatar", async (c) => {
   ).bind(identifier, Number(identifier) || 0).first<{ avatar_url: string }>();
 
   if (!user || !user.avatar_url) {
-    // Return default avatar SVG
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="50" fill="#e2e8f0"/>
-      <circle cx="50" cy="35" r="18" fill="#94a3b8"/>
-      <ellipse cx="50" cy="85" rx="30" ry="25" fill="#94a3b8"/>
-    </svg>`;
-    return new Response(svg, {
-      headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600" },
-    });
+    return renderDefaultAvatarResponse();
   }
 
   // If avatar is an R2 reference
@@ -232,6 +270,30 @@ fileRoutes.get("/users/:identifier/avatar", async (c) => {
     }
   }
 
-  // Redirect to external URL
-  return Response.redirect(user.avatar_url, 302);
+  // Serve safe base64 image avatars directly (data URIs cannot be passed to Response.redirect).
+  if (user.avatar_url.startsWith("data:")) {
+    const parsedDataAvatar = parseSafeAvatarDataUrl(user.avatar_url);
+    if (!parsedDataAvatar) {
+      return renderDefaultAvatarResponse();
+    }
+    return new Response(parsedDataAvatar.bytes, {
+      headers: {
+        "Content-Type": parsedDataAvatar.contentType,
+        "Cache-Control": "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
+
+  // Only redirect valid external HTTP/HTTPS avatar URLs.
+  try {
+    const parsed = new URL(user.avatar_url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return Response.redirect(parsed.toString(), 302);
+    }
+  } catch {
+    // Fall back to default avatar for invalid or relative URLs.
+  }
+
+  return renderDefaultAvatarResponse();
 });
