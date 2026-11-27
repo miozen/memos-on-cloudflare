@@ -18,7 +18,7 @@ function isTagBoundaryBefore(char: string): boolean {
   return !TAG_CHAR_REGEX.test(char) && char !== "#" && char !== "=" && char !== "?";
 }
 
-function isValidTagText(tag: string): boolean {
+export function isValidTagText(tag: string): boolean {
   if (!tag || tag.length > MAX_TAG_LENGTH || HEX_COLOR_BODY_REGEX.test(tag)) {
     return false;
   }

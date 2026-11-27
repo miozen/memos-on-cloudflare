@@ -173,6 +173,7 @@
     "suggest-tags": "Suggest tags with AI",
     "suggest-tags-empty": "No additional tags suggested.",
     "suggest-tags-failed": "Failed to suggest tags.",
+    "suggested-tag-new": "New",
     "suggested-tags-label": "Suggested tags:",
     "audio-recorder": {
       "attachment-label": "Audio recording",
@@ -470,7 +471,17 @@
       "transcription-warning-no-key": "The selected provider has no API key set. Edit the integration above to add one.",
       "transcription-enable": "Enable AI transcription",
       "transcription-enable-tooltip": "Enable audio transcription using Cloudflare Workers AI",
-      "cloudflare-ai-description": "AI features are powered by Cloudflare Workers AI. Audio transcription uses the Whisper model running on Cloudflare's edge network."
+      "cloudflare-ai-description": "AI features are powered by Cloudflare Workers AI, supporting tag recommendation models and edge audio transcription.",
+      "tag-suggestion-title": "AI Tag Suggestion",
+      "tag-suggestion-description": "Select the Cloudflare Workers AI text model used for 1st/2nd-level tag classification. Takes effect immediately after saving.",
+      "tag-suggestion-model": "Text model",
+      "tag-suggestion-model-help": "Models with stronger Chinese understanding and instruction following produce more consistent secondary tags.",
+      "tag-suggestion-invalid-saved": "Saved model \"{{model}}\" is unsupported and falls back to default at runtime. Save to update.",
+      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct (Default · Fast)",
+      "tag-model-glm-4-7-flash": "GLM-4.7 Flash (Strong Chinese · Fast)",
+      "tag-model-qwen-3-8-27b": "Qwen 3.8 27B (Strong Chinese & Classification)",
+      "tag-model-llama-3-3-70b": "Llama 3.3 70B FP8 Fast (Strong JSON & Instructions)",
+      "tag-model-llama-4-scout": "Llama 4 Scout 17B (Multilingual MoE)"
     },
     "instance": {
       "access-description": "Control sign-up, authentication, profile editing, and calendar defaults for this instance.",

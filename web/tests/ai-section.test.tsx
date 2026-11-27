@@ -5,7 +5,11 @@ import { InstanceSetting_Key } from "@/types/proto/api/v1/instance_service_pb";
 
 const updateSettingMock = vi.fn();
 const fetchSettingMock = vi.fn();
-let currentAiSetting: { providers: unknown[]; transcription?: { model?: string; language?: string } } = {
+let currentAiSetting: {
+  providers: unknown[];
+  transcription?: { model?: string; language?: string };
+  tagSuggestion?: { model?: string };
+} = {
   providers: [],
 };
 
@@ -70,5 +74,31 @@ describe("AISection", () => {
 
     expect(screen.getByRole("switch")).toBeChecked();
     expect(screen.getByDisplayValue("zh")).toBeInTheDocument();
+  });
+
+  it("shows warning and allows saving default when saved tag suggestion model is unsupported", async () => {
+    currentAiSetting = {
+      providers: [],
+      tagSuggestion: { model: "@cf/legacy/invalid-model" },
+    };
+    render(<AISection />);
+
+    expect(screen.getByText("setting.ai.tag-suggestion-invalid-saved")).toBeInTheDocument();
+    const saveButton = screen.getByRole("button", { name: "common.save" });
+    expect(saveButton).not.toBeDisabled();
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(updateSettingMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          value: expect.objectContaining({
+            case: "aiSetting",
+            value: expect.objectContaining({
+              tagSuggestion: { model: "@cf/meta/llama-3.1-8b-instruct" },
+            }),
+          }),
+        }),
+      );
+    });
   });
 });

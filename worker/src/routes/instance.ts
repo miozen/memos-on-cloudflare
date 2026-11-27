@@ -7,6 +7,7 @@ import { getAppVersion } from "../version";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
 import { sendResendEmail } from "../notification";
 import { ensureDefaultTagsSetting, isInternalSystemSettingName } from "../default-tags";
+import { isSupportedTagSuggestionModel } from "../ai-models";
 
 type InstApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -233,6 +234,18 @@ instanceRoutes.patch("/settings/*", authRequired, async (c) => {
   }
   const key = getInstanceSettingKey(name);
   const body = await c.req.json<{ value: string; description?: string }>();
+  if (key === "AI") {
+    let parsedAiSetting: { tagSuggestion?: { model?: unknown } };
+    try {
+      parsedAiSetting = JSON.parse(body.value) as { tagSuggestion?: { model?: unknown } };
+    } catch {
+      return c.json({ error: "Invalid AI setting JSON" }, 400);
+    }
+    const tagModel = parsedAiSetting?.tagSuggestion?.model;
+    if (tagModel !== undefined && tagModel !== null && tagModel !== "" && !isSupportedTagSuggestionModel(tagModel)) {
+      return c.json({ error: `Unsupported Workers AI tag suggestion model: ${String(tagModel)}` }, 400);
+    }
+  }
   await settingDB.setSystemSetting(c.env.DB, name, body.value, body.description);
   const settingCacheKeys =
     key === "AI"

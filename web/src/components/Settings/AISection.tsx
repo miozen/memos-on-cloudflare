@@ -2,6 +2,7 @@ import { isEqual } from "lodash-es";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useInstance } from "@/contexts/InstanceContext";
 import { InstanceSetting_Key } from "@/types/proto/api/v1/instance_service_pb";
@@ -16,18 +17,58 @@ interface CloudflareAIConfig {
   enabled: boolean;
   transcriptionModel: string;
   transcriptionLanguage: string;
+  tagSuggestionModel: string;
 }
 
 const DEFAULT_TRANSCRIPTION_MODEL = "@cf/openai/whisper";
+const DEFAULT_TAG_SUGGESTION_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
-function deriveConfig(aiSetting: unknown): CloudflareAIConfig {
-  const setting = aiSetting as { providers?: unknown[]; transcription?: { model?: string; language?: string } } | undefined;
+const WORKERS_AI_TAG_MODELS = [
+  {
+    id: "@cf/meta/llama-3.1-8b-instruct",
+    labelKey: "setting.ai.tag-model-llama-3-1-8b",
+  },
+  {
+    id: "@cf/zai-org/glm-4.7-flash",
+    labelKey: "setting.ai.tag-model-glm-4-7-flash",
+  },
+  {
+    id: "@cf/qwen/qwen3.8-27b",
+    labelKey: "setting.ai.tag-model-qwen-3-8-27b",
+  },
+  {
+    id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    labelKey: "setting.ai.tag-model-llama-3-3-70b",
+  },
+  {
+    id: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    labelKey: "setting.ai.tag-model-llama-4-scout",
+  },
+] as const;
+
+const SUPPORTED_TAG_MODEL_IDS = new Set<string>(WORKERS_AI_TAG_MODELS.map((m) => m.id));
+
+function deriveConfig(aiSetting: unknown): { config: CloudflareAIConfig; invalidSavedTagModel?: string } {
+  const setting = aiSetting as
+    | {
+        providers?: unknown[];
+        transcription?: { model?: string; language?: string };
+        tagSuggestion?: { model?: string };
+      }
+    | undefined;
   const hasProvider = (setting?.providers || []).length > 0;
   const transcription = setting?.transcription;
+  const rawTagModel = setting?.tagSuggestion?.model;
+  const isTagModelValid = !rawTagModel || SUPPORTED_TAG_MODEL_IDS.has(rawTagModel);
+
   return {
-    enabled: hasProvider,
-    transcriptionModel: transcription?.model || DEFAULT_TRANSCRIPTION_MODEL,
-    transcriptionLanguage: transcription?.language || "",
+    config: {
+      enabled: hasProvider,
+      transcriptionModel: transcription?.model || DEFAULT_TRANSCRIPTION_MODEL,
+      transcriptionLanguage: transcription?.language || "",
+      tagSuggestionModel: isTagModelValid && rawTagModel ? rawTagModel : DEFAULT_TAG_SUGGESTION_MODEL,
+    },
+    invalidSavedTagModel: rawTagModel && !isTagModelValid ? rawTagModel : undefined,
   };
 }
 
@@ -35,14 +76,14 @@ const AISection = () => {
   const t = useTranslate();
   const { aiSetting: originalSetting } = useInstance();
   const saveInstanceSetting = useInstanceSettingUpdater();
-  const savedConfig = useMemo(() => deriveConfig(originalSetting), [originalSetting]);
+  const { config: savedConfig, invalidSavedTagModel } = useMemo(() => deriveConfig(originalSetting), [originalSetting]);
   const [config, setConfig] = useState<CloudflareAIConfig>(savedConfig);
 
   useEffect(() => {
     setConfig(savedConfig);
   }, [savedConfig]);
 
-  const hasChanges = !isEqual(config, savedConfig);
+  const hasChanges = !isEqual(config, savedConfig) || Boolean(invalidSavedTagModel);
 
   const handleSave = async () => {
     const providers = config.enabled
@@ -61,12 +102,13 @@ const AISection = () => {
     const transcription = config.enabled
       ? { providerId: "cloudflare-ai", model: config.transcriptionModel, language: config.transcriptionLanguage, prompt: "" }
       : undefined;
+    const tagSuggestion = { model: config.tagSuggestionModel };
 
     await saveInstanceSetting({
       key: InstanceSetting_Key.AI,
       setting: {
         name: buildInstanceSettingName(InstanceSetting_Key.AI),
-        value: { case: "aiSetting", value: { providers, transcription } },
+        value: { case: "aiSetting", value: { providers, transcription, tagSuggestion } },
       } as Parameters<typeof saveInstanceSetting>[0]["setting"],
       errorContext: "Failed to save AI settings",
     });
@@ -81,7 +123,32 @@ const AISection = () => {
         </div>
       </SettingPanel>
 
-      <SettingGroup title={t("setting.ai.transcription-title")} description={t("setting.ai.transcription-description")}>
+      <SettingGroup title={t("setting.ai.tag-suggestion-title")} description={t("setting.ai.tag-suggestion-description")}>
+        <SettingRow label={t("setting.ai.tag-suggestion-model")} description={t("setting.ai.tag-suggestion-model-help")}>
+          <Select
+            value={config.tagSuggestionModel}
+            onValueChange={(value) => setConfig((prev) => ({ ...prev, tagSuggestionModel: value }))}
+          >
+            <SelectTrigger className="w-72 font-mono text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {WORKERS_AI_TAG_MODELS.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {t(model.labelKey)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingRow>
+        {invalidSavedTagModel && (
+          <p className="px-3 pb-2 text-xs text-destructive">
+            {t("setting.ai.tag-suggestion-invalid-saved", { model: invalidSavedTagModel })}
+          </p>
+        )}
+      </SettingGroup>
+
+      <SettingGroup title={t("setting.ai.transcription-title")} description={t("setting.ai.transcription-description")} showSeparator>
         <SettingRow label={t("setting.ai.transcription-enable")} tooltip={t("setting.ai.transcription-enable-tooltip")}>
           <Switch checked={config.enabled} onCheckedChange={(checked) => setConfig((prev) => ({ ...prev, enabled: checked }))} />
         </SettingRow>

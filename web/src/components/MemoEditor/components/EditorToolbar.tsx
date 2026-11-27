@@ -1,10 +1,9 @@
 import { LoaderIcon, SparklesIcon } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Button } from "@/components/ui/button";
 import { aiServiceClient } from "@/connect";
 import { useInstance } from "@/contexts/InstanceContext";
-import { useTagCounts } from "@/hooks/useUserQueries";
 import { useTranslate } from "@/utils/i18n";
 import { validationService } from "../services";
 import { useEditorContext } from "../state";
@@ -12,43 +11,79 @@ import InsertMenu from "../Toolbar/InsertMenu";
 import VisibilitySelector from "../Toolbar/VisibilitySelector";
 import type { EditorToolbarProps } from "../types";
 
+interface SuggestedTagChip {
+  tag: string;
+  mode: "reuse" | "new" | "primary";
+}
+
 export const EditorToolbar: FC<EditorToolbarProps> = ({ onSave, onCancel, memoName, onAudioRecorderClick, onInsertSuggestedTag }) => {
   const t = useTranslate();
   const { state, actions, dispatch } = useEditorContext();
   const { memoRelatedSetting } = useInstance();
-  const { data: tagCounts = {} } = useTagCounts(true);
   const [isSuggestingTags, setIsSuggestingTags] = useState(false);
-  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [suggestedTags, setSuggestedTags] = useState<SuggestedTagChip[]>([]);
+  const requestSeqRef = useRef(0);
   const { valid } = validationService.canSave(state, { contentLengthLimit: memoRelatedSetting.contentLengthLimit });
 
   const isSaving = state.ui.isLoading.saving;
+
+  useEffect(() => {
+    requestSeqRef.current++;
+    setSuggestedTags([]);
+    setIsSuggestingTags(false);
+  }, [memoName]);
+
+  useEffect(() => {
+    if (!state.content.trim()) {
+      requestSeqRef.current++;
+      setSuggestedTags([]);
+      setIsSuggestingTags(false);
+    }
+  }, [state.content]);
+
+  useEffect(() => {
+    return () => {
+      requestSeqRef.current++;
+    };
+  }, []);
 
   const handleSuggestTags = async () => {
     const content = state.content.trim();
     if (!content || isSuggestingTags) return;
 
+    const reqId = ++requestSeqRef.current;
     setIsSuggestingTags(true);
     try {
-      const result = await aiServiceClient.suggestTags({
-        content,
-        candidateTags: Object.keys(tagCounts),
-      });
-      if (result.tags.length === 0) {
+      const result = await aiServiceClient.suggestTags({ content });
+      if (requestSeqRef.current !== reqId) {
+        return;
+      }
+      const nextSuggestions: SuggestedTagChip[] =
+        Array.isArray(result.suggestions) && result.suggestions.length > 0
+          ? result.suggestions
+          : result.tags.map((tag) => ({ tag, mode: tag.includes("/") ? "reuse" : "primary" }));
+
+      if (nextSuggestions.length === 0) {
         toast(t("editor.suggest-tags-empty"));
         setSuggestedTags([]);
       } else {
-        setSuggestedTags(result.tags);
+        setSuggestedTags(nextSuggestions);
       }
     } catch {
+      if (requestSeqRef.current !== reqId) {
+        return;
+      }
       toast.error(t("editor.suggest-tags-failed"));
     } finally {
-      setIsSuggestingTags(false);
+      if (requestSeqRef.current === reqId) {
+        setIsSuggestingTags(false);
+      }
     }
   };
 
   const handlePickSuggestedTag = (tag: string) => {
     onInsertSuggestedTag?.(tag);
-    setSuggestedTags((prev) => prev.filter((item) => item !== tag));
+    setSuggestedTags((prev) => prev.filter((item) => item.tag !== tag));
   };
 
   const handleLocationChange = (location: typeof state.metadata.location) => {
@@ -68,14 +103,19 @@ export const EditorToolbar: FC<EditorToolbarProps> = ({ onSave, onCancel, memoNa
       {suggestedTags.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-muted-foreground">{t("editor.suggested-tags-label")}</span>
-          {suggestedTags.map((tag) => (
+          {suggestedTags.map((item) => (
             <button
-              key={tag}
+              key={item.tag}
               type="button"
-              onClick={() => handlePickSuggestedTag(tag)}
+              onClick={() => handlePickSuggestedTag(item.tag)}
               className="inline-flex items-center rounded-full border border-border bg-accent/50 px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-accent"
             >
-              {`+ #${tag}`}
+              <span>{`+ #${item.tag}`}</span>
+              {item.mode === "new" && (
+                <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[10px] font-medium text-primary">
+                  {t("editor.suggested-tag-new")}
+                </span>
+              )}
             </button>
           ))}
         </div>

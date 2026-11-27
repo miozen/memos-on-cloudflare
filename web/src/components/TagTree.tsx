@@ -20,7 +20,7 @@ const TagTree = ({ tagAmounts: rawTagAmounts, expandSubTags, multiSelect = false
   const [tags, setTags] = useState<Tag[]>([]);
 
   useEffect(() => {
-    const sortedTagAmounts = Array.from(rawTagAmounts).sort();
+    const sortedTagAmounts = Array.from(rawTagAmounts).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     const root: Tag = {
       key: "",
       text: "",

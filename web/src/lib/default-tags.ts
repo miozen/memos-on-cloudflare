@@ -1,6 +1,8 @@
+import type { Translations } from "@/utils/i18n";
+
 export interface DefaultTagPreset {
   name: string;
-  purposeKey: string;
+  purposeKey: Translations;
   defaultColor: string;
 }
 

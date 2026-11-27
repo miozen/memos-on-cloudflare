@@ -7,6 +7,7 @@ import useCurrentUser from "@/hooks/useCurrentUser";
 import { memoKeys } from "@/hooks/useMemoQueries";
 import { userKeys } from "@/hooks/useUserQueries";
 import { handleError } from "@/lib/error";
+import { applySuggestedTagToContent } from "@/lib/tag";
 import { cn } from "@/lib/utils";
 import { InstanceSetting_Key } from "@/types/proto/api/v1/instance_service_pb";
 import { useTranslate } from "@/utils/i18n";
@@ -305,8 +306,10 @@ const MemoEditorImpl: React.FC<MemoEditorProps> = ({
     const editor = editorRef.current;
     if (!editor) return;
     const current = editor.getContent();
-    const prefix = current.length === 0 || /[\s\n]$/.test(current) ? "" : " ";
-    editor.setContent(`${current}${prefix}#${tag} `);
+    const nextContent = applySuggestedTagToContent(current, tag);
+    if (nextContent !== current) {
+      editor.setContent(nextContent);
+    }
     editor.focus();
   }, []);
 

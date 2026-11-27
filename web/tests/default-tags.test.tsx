@@ -130,10 +130,14 @@ describe("default PKM tag rules and UI", () => {
     }
   });
 
-  it("does not match unknown or partial tags against the anchored default rules", () => {
-    for (const unknownTag of ["未知标签", "日常生活", "技术/前端", "工作日报", "待办事项", "daily", "work"]) {
+  it("does not match unknown or partial tags against the anchored default rules, while secondary tags inherit parent color", () => {
+    for (const unknownTag of ["未知标签", "日常生活", "工作日报", "待办事项", "daily", "work"]) {
       expect(findTagMetadata(unknownTag, currentTagsSetting)).toBeUndefined();
     }
+    const inheritedSub = findTagMetadata("技术/前端", currentTagsSetting);
+    expect(inheritedSub).toBeDefined();
+    expect(colorToHex(inheritedSub?.backgroundColor)).toBe("#00cc66");
+    expect(inheritedSub?.blurContent).toBe(false);
   });
 
   it("does not parse plain-text keywords without # or trigger blur when blurContent is false", () => {

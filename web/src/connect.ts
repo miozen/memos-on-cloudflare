@@ -635,9 +635,14 @@ export const aiServiceClient = {
   },
 
   async suggestTags(req: { content: string; candidateTags?: string[] }) {
-    return apiRequest<{ tags: string[]; source: "ai" | "heuristic" }>("POST", "/api/v1/ai/suggestTags", {
+    return apiRequest<{
+      tags: string[];
+      suggestions?: Array<{ tag: string; mode: "reuse" | "new" | "primary" }>;
+      model?: string;
+      source: "ai" | "heuristic";
+    }>("POST", "/api/v1/ai/suggestTags", {
       content: req.content,
-      candidateTags: req.candidateTags,
+      ...(req.candidateTags ? { candidateTags: req.candidateTags } : {}),
     });
   },
 };

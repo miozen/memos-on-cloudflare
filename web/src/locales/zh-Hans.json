@@ -166,6 +166,7 @@
     "suggest-tags": "智能推荐标签",
     "suggest-tags-empty": "暂无新的推荐标签。",
     "suggest-tags-failed": "获取标签推荐失败。",
+    "suggested-tag-new": "新",
     "suggested-tags-label": "推荐标签：",
     "insert-menu": {
       "add-location": "添加位置",
@@ -435,7 +436,17 @@
       "transcription-model": "模型",
       "transcription-model-help": "Cloudflare Workers AI 转写模型",
       "transcription-title": "语音转写",
-      "cloudflare-ai-description": "AI 功能由 Cloudflare Workers AI 提供。音频转写使用运行在 Cloudflare 边缘网络上的 Whisper 模型。"
+      "cloudflare-ai-description": "AI 功能由 Cloudflare Workers AI 提供。支持配置文本标签推荐模型与边缘音频转写。",
+      "tag-suggestion-title": "AI 标签推荐",
+      "tag-suggestion-description": "选择用于笔记一级/二级动态标签归类的 Cloudflare Workers AI 文本模型，保存后立即生效。",
+      "tag-suggestion-model": "文本模型",
+      "tag-suggestion-model-help": "优先推荐中文理解与指令遵循能力较强的模型。",
+      "tag-suggestion-invalid-saved": "当前已保存的模型 \"{{model}}\" 不在支持列表中，运行时将自动回退至默认模型。请保存更新。",
+      "tag-model-llama-3-1-8b": "Llama 3.1 8B Instruct（默认 · 轻量快速）",
+      "tag-model-glm-4-7-flash": "GLM-4.7 Flash（中文强 · 快速）",
+      "tag-model-qwen-3-8-27b": "Qwen 3.8 27B（中文语义与归类强）",
+      "tag-model-llama-3-3-70b": "Llama 3.3 70B FP8 Fast（指令与 JSON 稳定）",
+      "tag-model-llama-4-scout": "Llama 4 Scout 17B（多语言 MoE）"
     },
     "preference": {
       "appearance-description": "选择当前账号使用的界面语言和外观主题。",
