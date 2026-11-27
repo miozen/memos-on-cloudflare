@@ -27,6 +27,7 @@ import { TrustedIframe } from "./TrustedIframe";
 interface MemoMarkdownRendererProps {
   content: string;
   resolvedMentionUsernames: Set<string>;
+  hideTags?: boolean;
 }
 
 function getMentionUsername(node: Element, children?: React.ReactNode): string {
@@ -48,7 +49,7 @@ function getMentionUsername(node: Element, children?: React.ReactNode): string {
   return "";
 }
 
-export const MemoMarkdownRenderer = ({ content, resolvedMentionUsernames }: MemoMarkdownRendererProps) => {
+export const MemoMarkdownRenderer = ({ content, resolvedMentionUsernames, hideTags = false }: MemoMarkdownRendererProps) => {
   const markdownComponents: Components = {
     input: ({ node, ...inputProps }) => {
       if (node && isTaskListItemElement(node)) {
@@ -62,7 +63,7 @@ export const MemoMarkdownRenderer = ({ content, resolvedMentionUsernames }: Memo
         return <Mention {...spanProps} node={node} data-mention={username} resolved={resolvedMentionUsernames.has(username)} />;
       }
       if (node && isTagElement(node)) {
-        return <Tag {...spanProps} node={node} />;
+        return hideTags ? null : <Tag {...spanProps} node={node} />;
       }
       return <span {...spanProps} />;
     },
@@ -129,7 +130,7 @@ export const MemoMarkdownRenderer = ({ content, resolvedMentionUsernames }: Memo
           remarkSplitMixedTaskLists,
           remarkBreaks,
           remarkMention,
-          remarkTag,
+          [remarkTag, { hideTags }],
           remarkPreserveType,
         ]}
         rehypePlugins={[

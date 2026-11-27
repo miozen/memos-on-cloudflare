@@ -3,6 +3,7 @@ import { memo, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useTranslate } from "@/utils/i18n";
 import { extractMentionUsernames } from "@/utils/remark-plugins/remark-mention";
+import { hasNonTagMarkdownContent } from "@/utils/remark-plugins/remark-tag";
 import { COMPACT_MODE_CONFIG } from "./constants";
 import { useCompactLabel, useCompactMode } from "./hooks";
 import { MemoMarkdownRenderer } from "./MemoMarkdownRenderer";
@@ -10,7 +11,7 @@ import { useResolvedMentionUsernames } from "./MentionResolutionContext";
 import type { MemoContentProps } from "./types";
 
 const MemoContent = (props: MemoContentProps) => {
-  const { className, contentClassName, content, onClick, onDoubleClick } = props;
+  const { className, contentClassName, content, hideTags = false, onClick, onDoubleClick } = props;
   const t = useTranslate();
   const {
     containerRef: memoContentContainerRef,
@@ -19,8 +20,13 @@ const MemoContent = (props: MemoContentProps) => {
   } = useCompactMode(Boolean(props.compact));
   const mentionUsernames = useMemo(() => extractMentionUsernames(content), [content]);
   const resolvedMentionUsernames = useResolvedMentionUsernames(mentionUsernames);
+  const hasVisibleContent = useMemo(() => (hideTags ? hasNonTagMarkdownContent(content) : true), [content, hideTags]);
 
   const compactLabel = useCompactLabel(showCompactMode, t as (key: string) => string);
+
+  if (hideTags && !hasVisibleContent) {
+    return null;
+  }
 
   return (
     <div className={`w-full flex flex-col justify-start items-start text-foreground ${className || ""}`}>
@@ -40,7 +46,7 @@ const MemoContent = (props: MemoContentProps) => {
         onMouseUp={onClick}
         onDoubleClick={onDoubleClick}
       >
-        <MemoMarkdownRenderer content={content} resolvedMentionUsernames={resolvedMentionUsernames} />
+        <MemoMarkdownRenderer content={content} resolvedMentionUsernames={resolvedMentionUsernames} hideTags={hideTags} />
         {showCompactMode === "ALL" && (
           <div
             className={cn(

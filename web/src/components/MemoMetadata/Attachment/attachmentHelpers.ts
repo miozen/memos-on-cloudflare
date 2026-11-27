@@ -38,6 +38,8 @@ export const separateAttachments = (attachments: Attachment[]): AttachmentGroups
   );
 };
 
+export const hasVisualAttachments = (attachments: Attachment[]): boolean => separateAttachments(attachments).visual.length > 0;
+
 export const getAttachmentMetadata = (attachment: Attachment): AttachmentMetadata => ({
   fileTypeLabel: getFileTypeLabel(attachment.type),
   fileSizeLabel: attachment.size ? formatFileSize(Number(attachment.size)) : undefined,
