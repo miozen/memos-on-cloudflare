@@ -1,5 +1,7 @@
 import { Settings2Icon } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { useMemoFilterContext } from "@/contexts/MemoFilterContext";
 import { useView } from "@/contexts/ViewContext";
 import { cn } from "@/lib/utils";
 import { useTranslate } from "@/utils/i18n";
@@ -12,7 +14,17 @@ interface Props {
 function MemoDisplaySettingMenu({ className }: Props) {
   const t = useTranslate();
   const { orderByTimeAsc, timeBasis, setTimeBasis, toggleSortOrder } = useView();
-  const isApplying = orderByTimeAsc !== false || timeBasis !== "create_time";
+  const { getFiltersByFactor, addFilter, removeFiltersByFactor } = useMemoFilterContext();
+  const onlyIncompleteTasks = getFiltersByFactor("property.hasIncompleteTask").length > 0;
+  const isApplying = orderByTimeAsc !== false || timeBasis !== "create_time" || onlyIncompleteTasks;
+
+  const handleIncompleteTaskToggle = (checked: boolean) => {
+    if (checked) {
+      addFilter({ factor: "property.hasIncompleteTask", value: "true" });
+    } else {
+      removeFiltersByFactor("property.hasIncompleteTask");
+    }
+  };
 
   return (
     <Popover>
@@ -51,6 +63,10 @@ function MemoDisplaySettingMenu({ className }: Props) {
                 <SelectItem value="true">{t("memo.oldest-first")}</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="w-full flex flex-row justify-between items-center pt-1 border-t border-border/60">
+            <span className="text-sm shrink-0 mr-3 text-foreground">{t("memo.filters.has-incomplete-task")}</span>
+            <Switch checked={onlyIncompleteTasks} onCheckedChange={handleIncompleteTaskToggle} />
           </div>
         </div>
       </PopoverContent>

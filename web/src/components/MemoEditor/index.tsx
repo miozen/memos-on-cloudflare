@@ -239,7 +239,7 @@ const MemoEditorImpl: React.FC<MemoEditorProps> = ({
       contentLengthLimit: memoRelatedSetting.contentLengthLimit,
     });
     if (!valid) {
-      toast.error(reasonKey ? t(reasonKey, reasonParams) : (reason || "Cannot save"));
+      toast.error(reasonKey ? t(reasonKey, reasonParams) : reason || "Cannot save");
       return;
     }
 
@@ -301,6 +301,15 @@ const MemoEditorImpl: React.FC<MemoEditorProps> = ({
     }
   }
 
+  const handleInsertSuggestedTag = useCallback((tag: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const current = editor.getContent();
+    const prefix = current.length === 0 || /[\s\n]$/.test(current) ? "" : " ";
+    editor.setContent(`${current}${prefix}#${tag} `);
+    editor.focus();
+  }, []);
+
   return (
     <>
       <FocusModeOverlay isActive={state.ui.isFocusMode} onToggle={handleToggleFocusMode} />
@@ -347,7 +356,13 @@ const MemoEditorImpl: React.FC<MemoEditorProps> = ({
         {/* Metadata and toolbar grouped together at bottom */}
         <div className="w-full flex flex-col gap-2">
           <EditorMetadata memoName={memoName} />
-          <EditorToolbar onSave={handleSave} onCancel={onCancel} memoName={memoName} onAudioRecorderClick={handleAudioRecorderClick} />
+          <EditorToolbar
+            onSave={handleSave}
+            onCancel={onCancel}
+            memoName={memoName}
+            onAudioRecorderClick={handleAudioRecorderClick}
+            onInsertSuggestedTag={handleInsertSuggestedTag}
+          />
         </div>
       </div>
     </>

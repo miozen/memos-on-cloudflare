@@ -1,4 +1,4 @@
-import { apiRequest, buildQueryString, refreshAccessToken as doRefresh } from "./api/client";
+import { apiDownload, apiRequest, buildQueryString, refreshAccessToken as doRefresh } from "./api/client";
 
 export { doRefresh as refreshAccessToken };
 
@@ -64,6 +64,18 @@ export const memoServiceClient = {
   async deleteMemo(req: { name: string }) {
     const id = extractId(req.name, "memos/");
     await apiRequest<any>("DELETE", `/api/v1/memos/${id}`);
+  },
+
+  async renameTag(req: { oldTag: string; newTag?: string | null }) {
+    return apiRequest<{ updatedCount: number; oldTag: string; newTag: string | null }>("POST", "/api/v1/memos/tags:rename", {
+      oldTag: req.oldTag,
+      newTag: req.newTag ?? null,
+    });
+  },
+
+  async exportMemos(format: "json" | "markdown" = "json") {
+    const ext = format === "markdown" ? "md" : "json";
+    await apiDownload(`/api/v1/memos/export?format=${format}`, `memos-export.${ext}`);
   },
 
   async setMemoAttachments(req: { name: string; attachments: any[] }) {
@@ -620,6 +632,13 @@ export const aiServiceClient = {
 
     const data = await apiRequest<any>("POST", "/api/v1/ai/transcribe", formData, { isFormData: true });
     return { text: data.text || "" };
+  },
+
+  async suggestTags(req: { content: string; candidateTags?: string[] }) {
+    return apiRequest<{ tags: string[]; source: "ai" | "heuristic" }>("POST", "/api/v1/ai/suggestTags", {
+      content: req.content,
+      candidateTags: req.candidateTags,
+    });
   },
 };
 

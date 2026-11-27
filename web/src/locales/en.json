@@ -170,6 +170,10 @@
     "save": "Save",
     "saving": "Saving...",
     "slash-commands": "Type `/` for commands",
+    "suggest-tags": "Suggest tags with AI",
+    "suggest-tags-empty": "No additional tags suggested.",
+    "suggest-tags-failed": "Failed to suggest tags.",
+    "suggested-tags-label": "Suggested tags:",
     "audio-recorder": {
       "attachment-label": "Audio recording",
       "attachment-label-with-time": "Audio recording {{time}}",
@@ -240,6 +244,7 @@
     "display-time": "Display Time",
     "filters": {
       "has-code": "hasCode",
+      "has-incomplete-task": "Incomplete tasks",
       "has-link": "hasLink",
       "has-task-list": "hasTaskList",
       "label": "Filters"
@@ -559,7 +564,15 @@
       "memo-defaults-description": "Set the defaults used when composing new memos.",
       "memo-defaults-title": "Memo defaults",
       "theme-description": "Applies the selected theme immediately on this device.",
-      "theme": "Theme"
+      "theme": "Theme",
+      "export-title": "Export & Backup",
+      "export-description": "Download all memos owned by your account for local backup.",
+      "export-label": "Export memos",
+      "export-help": "Export as readable Markdown with timestamps and attachment links, or full JSON.",
+      "export-markdown": "Export Markdown",
+      "export-json": "Export JSON",
+      "export-success": "Memo export downloaded.",
+      "export-failed": "Failed to export memos."
     },
     "shortcut": {
       "delete-confirm": "Are you sure you want to delete shortcut `{{title}}`?",
@@ -765,6 +778,13 @@
       "invalid-regex": "Invalid or unsafe regex pattern.",
       "used-count": "{{count}} memos",
       "using-default-color": "Using default color.",
+      "batch-title": "Batch rename or remove tag",
+      "batch-description": "Replace an existing tag across your memos, or leave the new name blank to remove it.",
+      "batch-hint": "Skips fenced code blocks, inline code, and URL fragments.",
+      "batch-new-placeholder": "New tag (leave empty to remove)",
+      "batch-apply": "Apply batch update",
+      "batch-success": "Updated {{count}} memos.",
+      "batch-failed": "Failed to update tag.",
       "preset-title": "Preset PKM tags",
       "preset-description": "Reference list of the 12 built-in tags. Use them directly in memos as #tag without creating placeholder notes.",
       "preset-purposes": {
@@ -815,7 +835,8 @@
     "rename-error-repeat": "New name cannot be the same as the old name",
     "rename-success": "Renamed tag successfully",
     "rename-tag": "Rename tag",
-    "rename-tip": "All your memos with this tag will be updated."
+    "rename-tip": "All your memos with this tag will be updated.",
+    "multi-select": "Multi-tag AND filter"
   },
   "tooltip": {
     "link-memo": "Link Memo",

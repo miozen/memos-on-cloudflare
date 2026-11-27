@@ -75,6 +75,8 @@ export const useMemoFilters = (options: UseMemoFiltersOptions = {}): string | un
         conditions.push(`has_link`);
       } else if (filter.factor === "property.hasTaskList") {
         conditions.push(`has_task_list`);
+      } else if (filter.factor === "property.hasIncompleteTask") {
+        conditions.push(`has_incomplete_tasks`);
       } else if (filter.factor === "property.hasCode") {
         conditions.push(`has_code`);
       } else if (filter.factor === "displayTime") {

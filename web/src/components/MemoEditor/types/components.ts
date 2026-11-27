@@ -32,6 +32,7 @@ export interface EditorToolbarProps {
   onCancel?: () => void;
   memoName?: string;
   onAudioRecorderClick: () => void;
+  onInsertSuggestedTag?: (tag: string) => void;
 }
 
 export interface EditorMetadataProps {

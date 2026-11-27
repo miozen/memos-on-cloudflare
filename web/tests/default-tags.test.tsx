@@ -46,11 +46,25 @@ vi.mock("@/contexts/InstanceContext", () => ({
   }),
 }));
 
-vi.mock("@/hooks/useUserQueries", () => ({
-  useTagCounts: () => ({
-    data: currentTagCounts,
-  }),
-}));
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: vi.fn(),
+    }),
+  };
+});
+
+vi.mock("@/hooks/useUserQueries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useUserQueries")>();
+  return {
+    ...actual,
+    useTagCounts: () => ({
+      data: currentTagCounts,
+    }),
+  };
+});
 
 vi.mock("@/utils/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/i18n")>();

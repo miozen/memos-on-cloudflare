@@ -37,9 +37,20 @@ export function useSuggestions<T>({
   const [position, setPosition] = useState<Position | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const isProcessingRef = useRef(false);
+  const isComposingRef = useRef(false);
+  const lastCompositionEndRef = useRef(0);
 
   const selectedRef = useRef(selectedIndex);
   selectedRef.current = selectedIndex;
+
+  const filterItemsRef = useRef(filterItems);
+  filterItemsRef.current = filterItems;
+
+  const onAutocompleteRef = useRef(onAutocomplete);
+  onAutocompleteRef.current = onAutocomplete;
+
+  const triggerCharRef = useRef(triggerChar);
+  triggerCharRef.current = triggerChar;
 
   const getCurrentWord = (): [word: string, startIndex: number] => {
     const editor = editorRef.current;
@@ -56,13 +67,13 @@ export function useSuggestions<T>({
   const searchQueryRef = useRef("");
   suggestionsRef.current = (() => {
     const [word] = getCurrentWord();
-    if (!word.startsWith(triggerChar)) return [];
-    searchQueryRef.current = word.slice(triggerChar.length).toLowerCase();
-    return filterItems(items, searchQueryRef.current);
+    if (!word.startsWith(triggerCharRef.current)) return [];
+    searchQueryRef.current = word.slice(triggerCharRef.current.length).toLowerCase();
+    return filterItemsRef.current(items, searchQueryRef.current);
   })();
   if (suggestionsRef.current.length === 0) {
     const [word] = getCurrentWord();
-    searchQueryRef.current = word.startsWith(triggerChar) ? word.slice(triggerChar.length).toLowerCase() : "";
+    searchQueryRef.current = word.startsWith(triggerCharRef.current) ? word.slice(triggerCharRef.current.length).toLowerCase() : "";
   }
 
   const isVisibleRef = useRef(false);
@@ -75,7 +86,7 @@ export function useSuggestions<T>({
     }
     isProcessingRef.current = true;
     const [word, index] = getCurrentWord();
-    onAutocomplete(item, word, index, editorActions.current);
+    onAutocompleteRef.current(item, word, index, editorActions.current);
     hide();
     // Re-enable input handling after all DOM operations complete
     queueMicrotask(() => {
@@ -97,6 +108,9 @@ export function useSuggestions<T>({
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!isVisibleRef.current) return;
+    if (e.isComposing || e.keyCode === 229 || isComposingRef.current || Date.now() - lastCompositionEndRef.current < 100) {
+      return;
+    }
 
     const suggestions = suggestionsRef.current;
     const selected = selectedRef.current;
@@ -127,7 +141,8 @@ export function useSuggestions<T>({
     setSelectedIndex(0);
     const [word, index] = getCurrentWord();
     const currentChar = editor.value[editor.selectionEnd];
-    const isActive = word.startsWith(triggerChar) && currentChar !== triggerChar;
+    const currentTrigger = triggerCharRef.current;
+    const isActive = word.startsWith(currentTrigger) && currentChar !== currentTrigger;
 
     if (isActive) {
       const coords = getCaretCoordinates(editor, index);
@@ -142,7 +157,24 @@ export function useSuggestions<T>({
     const editor = editorRef.current;
     if (!editor) return;
 
-    const handlers = { click: hide, blur: hide, keydown: handleKeyDown, input: handleInput };
+    const handleCompositionStart = () => {
+      isComposingRef.current = true;
+    };
+
+    const handleCompositionEnd = () => {
+      isComposingRef.current = false;
+      lastCompositionEndRef.current = Date.now();
+      handleInput();
+    };
+
+    const handlers = {
+      click: hide,
+      blur: hide,
+      keydown: handleKeyDown,
+      input: handleInput,
+      compositionstart: handleCompositionStart,
+      compositionend: handleCompositionEnd,
+    };
     Object.entries(handlers).forEach(([event, handler]) => {
       editor.addEventListener(event, handler as EventListener);
     });

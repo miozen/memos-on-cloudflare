@@ -1,6 +1,6 @@
 import type { Root, Text } from "mdast";
 import type { Node as UnistNode, Parent as UnistParent } from "unist";
-import { visit } from "unist-util-visit";
+import { SKIP, visit } from "unist-util-visit";
 import type { TagNode, TagNodeData } from "@/types/markdown";
 
 export interface RemarkTagOptions {
@@ -8,6 +8,8 @@ export interface RemarkTagOptions {
 }
 
 const MAX_TAG_LENGTH = 100;
+const TAG_SEGMENT_START_REGEX = /[\p{L}\p{N}]/u;
+const HEX_COLOR_BODY_REGEX = /^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 function isTagChar(char: string): boolean {
   if (/\p{L}/u.test(char)) {
@@ -25,6 +27,23 @@ function isTagChar(char: string): boolean {
   return char === "_" || char === "-" || char === "/" || char === "&";
 }
 
+function isTagBoundaryBefore(prevChar: string): boolean {
+  if (!prevChar) return true;
+  if (/\s/.test(prevChar)) return true;
+  return !isTagChar(prevChar) && prevChar !== "#" && prevChar !== "=" && prevChar !== "?";
+}
+
+function isValidTagText(tagContent: string): boolean {
+  const runeCount = [...tagContent].length;
+  if (runeCount === 0 || runeCount > MAX_TAG_LENGTH || HEX_COLOR_BODY_REGEX.test(tagContent)) {
+    return false;
+  }
+  return tagContent.split("/").every((segment) => {
+    const firstChar = [...segment][0];
+    return Boolean(firstChar && TAG_SEGMENT_START_REGEX.test(firstChar));
+  });
+}
+
 function parseTagsFromText(text: string): Array<{ type: "text"; value: string } | { type: "tag"; value: string }> {
   const segments: Array<{ type: "text"; value: string } | { type: "tag"; value: string }> = [];
 
@@ -36,7 +55,7 @@ function parseTagsFromText(text: string): Array<{ type: "text"; value: string } 
       const prevChar = i > 0 ? chars[i - 1] : "";
       const nextChar = i + 1 < chars.length ? chars[i + 1] : "";
 
-      if (prevChar === "#" || nextChar === "#" || nextChar === " ") {
+      if (!isTagBoundaryBefore(prevChar) || nextChar === "#" || nextChar === " ") {
         segments.push({ type: "text", value: chars[i] });
         i++;
         continue;
@@ -49,8 +68,7 @@ function parseTagsFromText(text: string): Array<{ type: "text"; value: string } 
 
       const tagContent = chars.slice(i + 1, j).join("");
 
-      const runeCount = [...tagContent].length;
-      if (runeCount > 0 && runeCount <= MAX_TAG_LENGTH) {
+      if (isValidTagText(tagContent)) {
         segments.push({ type: "tag", value: tagContent });
         i = j;
         continue;
@@ -151,6 +169,15 @@ export const remarkTag = (options?: RemarkTagOptions) => {
     const parentsWithRemovedTags = new Set<UnistParent>();
 
     visit(tree, (node, index, parent) => {
+      if (
+        node.type === "link" ||
+        node.type === "linkReference" ||
+        node.type === "definition" ||
+        node.type === "code" ||
+        node.type === "inlineCode"
+      ) {
+        return SKIP;
+      }
       if (node.type !== "text" || !parent || index === null) return;
 
       const textNode = node as Text;

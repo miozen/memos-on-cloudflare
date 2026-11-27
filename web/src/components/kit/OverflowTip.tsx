@@ -12,12 +12,25 @@ const OverflowTip = ({ children, className }: Props) => {
   const textElementRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!textElementRef.current) {
+    const element = textElementRef.current;
+    if (!element) {
       return;
     }
 
-    setIsOverflow(textElementRef.current.scrollWidth > textElementRef.current.clientWidth);
-  }, []);
+    const checkOverflow = () => {
+      setIsOverflow(element.scrollWidth > element.clientWidth);
+    };
+
+    checkOverflow();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [children]);
 
   return (
     <TooltipProvider>

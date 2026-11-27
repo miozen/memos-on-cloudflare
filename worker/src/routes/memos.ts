@@ -28,6 +28,7 @@ import {
   type DeliverInboxNotificationOptions,
 } from "../notification";
 import { findUserById } from "../db/user";
+import { extractMemoTags, replaceMemoTagInContent } from "../tags";
 
 type MemoApp = { Bindings: Env; Variables: { user: UserPayload } };
 type MemoContext = Context<MemoApp>;
@@ -121,12 +122,7 @@ function emptyLinkMetadata(url?: string): LinkMetadata {
 }
 
 function parseMemoPayload(content: string) {
-  const tags: string[] = [];
-  const tagRegex = /#([a-zA-Z0-9_一-鿿぀-ゟ゠-ヿ/\-]+)/g;
-  let match;
-  while ((match = tagRegex.exec(content)) !== null) {
-    tags.push(match[1]);
-  }
+  const tags = extractMemoTags(content);
 
   const hasLink = /https?:\/\/[^\s]+/.test(content);
   const hasTaskList = /- \[[ x]\]/.test(content);
@@ -772,6 +768,141 @@ memoRoutes.get("/", authOptional, async (c) => {
     memos: await enrichMemos(c.env.DB, memos, usernameMap, user),
     nextPageToken,
     totalSize: total,
+  });
+});
+
+function normalizeTagInput(rawTag: unknown): string | null {
+  if (typeof rawTag !== "string") {
+    return null;
+  }
+  const stripped = rawTag.trim().replace(/^#+/, "");
+  if (!stripped || stripped.length > 100 || /\s/.test(stripped)) {
+    return null;
+  }
+  return stripped;
+}
+
+// Batch rename or remove a tag across the signed-in user's memos
+memoRoutes.post("/tags:rename", authRequired, async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json<{ oldTag?: unknown; newTag?: unknown }>();
+  const oldTag = normalizeTagInput(body.oldTag);
+  if (!oldTag) {
+    return c.json({ error: "Valid oldTag is required" }, 400);
+  }
+
+  let newTag: string | null = null;
+  if (body.newTag !== undefined && body.newTag !== null && String(body.newTag).trim() !== "") {
+    newTag = normalizeTagInput(body.newTag);
+    if (!newTag) {
+      return c.json({ error: "Invalid newTag" }, 400);
+    }
+  }
+
+  if (newTag === oldTag) {
+    return c.json({ updatedCount: 0, oldTag, newTag });
+  }
+
+  const { results: candidateRows } = await c.env.DB.prepare(
+    "SELECT id, content, payload FROM memo WHERE creator_id = ?"
+  ).bind(user.id).all<{ id: number; content: string; payload: string }>();
+
+  let updatedCount = 0;
+  for (const row of candidateRows) {
+    const nextContent = replaceMemoTagInContent(row.content, oldTag, newTag);
+    if (nextContent === row.content) {
+      continue;
+    }
+
+    const existingPayload = safeJsonParse<Record<string, any>>(row.payload, {});
+    const nextPayload = {
+      ...existingPayload,
+      ...parseMemoPayload(nextContent),
+    };
+    await memoDB.updateMemo(c.env.DB, row.id, {
+      content: nextContent,
+      payload: JSON.stringify(nextPayload),
+    });
+    updatedCount++;
+  }
+
+  if (updatedCount > 0) {
+    await invalidateMemoDerivedCaches(c.env.CACHE, [user.username]);
+  }
+
+  return c.json({ updatedCount, oldTag, newTag });
+});
+
+// Export all memos owned by the signed-in user as JSON or Markdown
+memoRoutes.get("/export", authRequired, async (c) => {
+  const user = c.get("user");
+  const format = c.req.query("format") === "markdown" ? "markdown" : "json";
+
+  const { results: memos } = await c.env.DB.prepare(
+    "SELECT * FROM memo WHERE creator_id = ? ORDER BY created_ts DESC"
+  ).bind(user.id).all<memoDB.MemoRow>();
+
+  const memoIds = memos.map((memo) => memo.id);
+  const attachmentRows = memoIds.length > 0 ? await listAttachmentRowsByMemoIds(c.env.DB, memoIds) : [];
+  const attachmentsByMemoId = new Map<number, Array<{ uid: string; filename: string; type: string; size: number }>>();
+  for (const att of attachmentRows) {
+    const list = attachmentsByMemoId.get(att.memo_id) ?? [];
+    list.push({
+      uid: att.uid,
+      filename: att.filename,
+      type: att.type,
+      size: att.size,
+    });
+    attachmentsByMemoId.set(att.memo_id, list);
+  }
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const exportedMemos = memos.map((memo) => ({
+    ...formatMemo(memo, user.username),
+    attachments: (attachmentsByMemoId.get(memo.id) ?? []).map((att) => ({
+      name: `attachments/${att.uid}`,
+      filename: att.filename,
+      type: att.type,
+      size: att.size,
+      url: `/file/attachments/${att.uid}/${encodeURIComponent(att.filename)}`,
+    })),
+  }));
+
+  if (format === "markdown") {
+    const markdownBlocks = exportedMemos.map((memo) => {
+      const header = `<!-- memo: ${memo.name} | created: ${memo.createTime} | updated: ${memo.updateTime} | visibility: ${memo.visibility} | state: ${memo.state}${memo.pinned ? " | pinned: true" : ""} -->`;
+      const attLines =
+        memo.attachments.length > 0
+          ? `\n\nAttachments:\n${memo.attachments.map((att) => `- [${att.filename}](${att.url})`).join("\n")}`
+          : "";
+      return `${header}\n\n${memo.content}${attLines}`;
+    });
+    const markdownBody = markdownBlocks.join("\n\n---\n\n");
+    return new Response(markdownBody, {
+      headers: {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Content-Disposition": `attachment; filename="memos-export-${dateStamp}.md"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  const payload = JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      user: user.username,
+      memoCount: exportedMemos.length,
+      memos: exportedMemos,
+    },
+    null,
+    2,
+  );
+  return new Response(payload, {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="memos-export-${dateStamp}.json"`,
+      "Cache-Control": "no-store",
+    },
   });
 });
 

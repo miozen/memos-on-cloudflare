@@ -163,6 +163,10 @@
     "save": "保存",
     "saving": "保存中...",
     "slash-commands": "按下 `/` 输入命令",
+    "suggest-tags": "智能推荐标签",
+    "suggest-tags-empty": "暂无新的推荐标签。",
+    "suggest-tags-failed": "获取标签推荐失败。",
+    "suggested-tags-label": "推荐标签：",
     "insert-menu": {
       "add-location": "添加位置",
       "link-memo": "链接备忘录",
@@ -232,6 +236,7 @@
     "display-time": "展示时间",
     "filters": {
       "has-code": "有代码",
+      "has-incomplete-task": "仅未完成待办",
       "has-link": "有链接",
       "has-task-list": "有待办",
       "label": "过滤器"
@@ -443,7 +448,15 @@
       "memo-defaults-title": "备忘录默认值",
       "theme-description": "立即在当前设备上应用所选主题。",
       "theme": "主题",
-      "label": "偏好设置"
+      "label": "偏好设置",
+      "export-title": "数据导出与备份",
+      "export-description": "将当前账号下的全部备忘录与附件索引导出到本地。",
+      "export-label": "导出数据",
+      "export-help": "支持导出含日期、标签和附件链接的 Markdown 或完整 JSON 备份。",
+      "export-markdown": "导出 Markdown",
+      "export-json": "导出 JSON",
+      "export-success": "数据导出已开始。",
+      "export-failed": "数据导出失败。"
     },
     "shortcut": {
       "delete-confirm": "您确定要删除捷径 `{{title}}` 吗？",
@@ -746,6 +759,13 @@
       "invalid-regex": "无效或不安全的正则表达式模式。",
       "used-count": "{{count}} 条备忘录",
       "using-default-color": "使用默认颜色。",
+      "batch-title": "批量重命名或清理标签",
+      "batch-description": "将当前账号下笔记中的旧标签统一替换为新标签，新标签留空则从笔记中移除旧标签。",
+      "batch-hint": "不会修改代码块、行内代码或 URL 锚点中的内容。",
+      "batch-new-placeholder": "新标签（留空则移除）",
+      "batch-apply": "应用批量更新",
+      "batch-success": "已更新 {{count}} 条备忘录。",
+      "batch-failed": "批量更新标签失败。",
       "preset-title": "预设标签体系",
       "preset-description": "内置 12 个个人知识管理标签供参考；可直接在笔记中输入 #标签 使用，无需预先占位。",
       "preset-purposes": {
@@ -796,7 +816,8 @@
     "rename-error-repeat": "新名称不能与旧名称相同",
     "rename-success": "重命名成功",
     "rename-tag": "重命名",
-    "rename-tip": "您的所有带有此标签的备忘录将被更新。"
+    "rename-tip": "您的所有带有此标签的备忘录将被更新。",
+    "multi-select": "多标签交集筛选"
   },
   "tooltip": {
     "link-memo": "链接备忘录",

@@ -3,6 +3,7 @@ import {
   BookmarkIcon,
   CalendarIcon,
   CheckCircleIcon,
+  CheckSquareIcon,
   CodeIcon,
   EyeIcon,
   HashIcon,
@@ -47,6 +48,10 @@ const FILTER_CONFIGS: Record<FilterFactor, FilterConfig> = {
   "property.hasTaskList": {
     icon: CheckCircleIcon,
     getLabel: (_, t) => t("memo.filters.has-task-list"),
+  },
+  "property.hasIncompleteTask": {
+    icon: CheckSquareIcon,
+    getLabel: (_, t) => t("memo.filters.has-incomplete-task"),
   },
   "property.hasCode": {
     icon: CodeIcon,

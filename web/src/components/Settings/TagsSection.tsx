@@ -1,14 +1,17 @@
 import { create } from "@bufbuild/protobuf";
+import { useQueryClient } from "@tanstack/react-query";
 import { isEqual } from "lodash-es";
-import { EyeOffIcon, PaletteIcon, PlusIcon, TagIcon, TrashIcon } from "lucide-react";
+import { ArrowRightIcon, EyeOffIcon, PaletteIcon, PlusIcon, TagIcon, TrashIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { memoServiceClient } from "@/connect";
 import { useInstance } from "@/contexts/InstanceContext";
-import { useTagCounts } from "@/hooks/useUserQueries";
+import { memoKeys } from "@/hooks/useMemoQueries";
+import { userKeys, useTagCounts } from "@/hooks/useUserQueries";
 import { colorToHex } from "@/lib/color";
 import { DEFAULT_PKM_TAGS } from "@/lib/default-tags";
 import { findTagMetadata, isValidTagPattern } from "@/lib/tag";
@@ -64,9 +67,13 @@ const buildTagsSetting = (localTags: Record<string, LocalTagMeta>) => {
 
 const TagsSection = () => {
   const t = useTranslate();
+  const queryClient = useQueryClient();
   const saveInstanceSetting = useInstanceSettingUpdater();
   const { tagsSetting: originalSetting } = useInstance();
   const { data: tagCounts = {} } = useTagCounts(false);
+  const [batchOldTag, setBatchOldTag] = useState("");
+  const [batchNewTag, setBatchNewTag] = useState("");
+  const [isRenamingTag, setIsRenamingTag] = useState(false);
 
   // Local state: map of tagName → { color, blur } for editing.
   const [localTags, setLocalTags] = useState<Record<string, LocalTagMeta>>(() =>
@@ -154,6 +161,40 @@ const TagsSection = () => {
       }),
       errorContext: "Update tags setting",
     });
+  };
+
+  const usedTagNames = useMemo(() => Object.keys(tagCounts).sort(), [tagCounts]);
+
+  const handleBatchRenameTag = async () => {
+    const oldTag = batchOldTag.trim().replace(/^#+/, "");
+    const nextRaw = batchNewTag.trim().replace(/^#+/, "");
+    if (!oldTag || /\s/.test(oldTag) || /\s/.test(nextRaw)) {
+      toast.error(t("tag.rename-error-empty"));
+      return;
+    }
+    if (oldTag === nextRaw) {
+      toast.error(t("tag.rename-error-repeat"));
+      return;
+    }
+
+    setIsRenamingTag(true);
+    try {
+      const result = await memoServiceClient.renameTag({
+        oldTag,
+        newTag: nextRaw || null,
+      });
+      toast.success(t("setting.tags.batch-success", { count: result.updatedCount }));
+      setBatchOldTag("");
+      setBatchNewTag("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: memoKeys.all }),
+        queryClient.invalidateQueries({ queryKey: userKeys.stats() }),
+      ]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("setting.tags.batch-failed"));
+    } finally {
+      setIsRenamingTag(false);
+    }
   };
 
   return (
@@ -283,6 +324,35 @@ const TagsSection = () => {
           {t("common.save")}
         </Button>
       </div>
+
+      <SettingGroup title={t("setting.tags.batch-title")} description={t("setting.tags.batch-description")} showSeparator>
+        <SettingPanel footer={<span className="text-xs text-muted-foreground">{t("setting.tags.batch-hint")}</span>}>
+          <div className="grid gap-2 px-3 py-3 sm:grid-cols-[minmax(8rem,1fr)_auto_minmax(8rem,1fr)_auto] sm:items-center">
+            <Input
+              className="font-mono"
+              placeholder={t("tag.old-name")}
+              value={batchOldTag}
+              onChange={(e) => setBatchOldTag(e.target.value)}
+              list="used-tags-list"
+            />
+            <datalist id="used-tags-list">
+              {usedTagNames.map((tag) => (
+                <option key={tag} value={tag} />
+              ))}
+            </datalist>
+            <ArrowRightIcon className="hidden size-4 text-muted-foreground sm:block" />
+            <Input
+              className="font-mono"
+              placeholder={t("setting.tags.batch-new-placeholder")}
+              value={batchNewTag}
+              onChange={(e) => setBatchNewTag(e.target.value)}
+            />
+            <Button variant="outline" disabled={!batchOldTag.trim() || isRenamingTag} onClick={handleBatchRenameTag}>
+              {t("setting.tags.batch-apply")}
+            </Button>
+          </div>
+        </SettingPanel>
+      </SettingGroup>
 
       <SettingGroup title={t("setting.tags.preset-title")} description={t("setting.tags.preset-description")} showSeparator>
         <SettingPanel>

@@ -127,7 +127,7 @@ userRoutes.get("/:username/stats", authOptional, async (c) => {
   const conditions = ["creator_id = ?", "row_status = 'NORMAL'"];
   const scope = appendStatsVisibilityFilter(conditions, user.id, currentUser);
   const cacheKey = `user:stats:${username}:${scope}`;
-  const cached = scope === "owner" ? undefined : await getCachedJson(c.env.CACHE, cacheKey);
+  const cached = await getCachedJson(c.env.CACHE, cacheKey);
   if (cached) {
     return c.json(cached);
   }
@@ -164,9 +164,7 @@ userRoutes.get("/:username/stats", authOptional, async (c) => {
     memoUpdatedTimestamps: memos.map((m) => ({ seconds: m.updated_ts, nanos: 0 })),
   };
 
-  if (scope !== "owner") {
-    await putCachedJson(c.env.CACHE, cacheKey, response, 60);
-  }
+  await putCachedJson(c.env.CACHE, cacheKey, response, scope === "owner" ? 300 : 60);
   return c.json(response);
 });
 

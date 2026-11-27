@@ -52,7 +52,10 @@ export function SuggestionsPopup<T>({
         <div
           key={getItemKey(item, i)}
           ref={i === selectedIndex ? selectedItemRef : null}
-          onMouseDown={() => onItemSelect(item)}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onItemSelect(item);
+          }}
           className={cn(POPUP_STYLES.item, i === selectedIndex && "bg-accent text-accent-foreground")}
         >
           {renderItem(item, i === selectedIndex)}

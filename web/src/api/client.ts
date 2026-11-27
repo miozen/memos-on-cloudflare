@@ -127,6 +127,43 @@ export async function apiRequest<T>(method: string, path: string, body?: unknown
   return resp.json();
 }
 
+export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
+  const token = await getRequestToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  let resp = await fetch(path, { method: "GET", headers, credentials: "include" });
+  if (resp.status === 401 && token) {
+    await refreshAccessToken();
+    const newToken = getAccessToken();
+    if (newToken) {
+      headers["Authorization"] = `Bearer ${newToken}`;
+      resp = await fetch(path, { method: "GET", headers, credentials: "include" });
+    }
+  }
+
+  if (!resp.ok) {
+    const errorData = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new Error(errorData.error || `HTTP ${resp.status}`);
+  }
+
+  const disposition = resp.headers.get("Content-Disposition") || "";
+  const filenameMatch = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const filename = filenameMatch?.[1] ? decodeURIComponent(filenameMatch[1]) : fallbackFilename;
+
+  const blob = await resp.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export function buildQueryString(params: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(params)) {

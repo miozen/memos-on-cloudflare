@@ -1,5 +1,10 @@
 import { create } from "@bufbuild/protobuf";
+import { DownloadIcon } from "lucide-react";
+import { useState } from "react";
+import { toast } from "react-hot-toast";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { memoServiceClient } from "@/connect";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUpdateUserGeneralSetting } from "@/hooks/useUserQueries";
 import { Visibility } from "@/types/proto/api/v1/memo_service_pb";
@@ -18,6 +23,19 @@ const PreferencesSection = () => {
   const t = useTranslate();
   const { currentUser, userGeneralSetting: generalSetting, refetchSettings } = useAuth();
   const { mutate: updateUserGeneralSetting } = useUpdateUserGeneralSetting(currentUser?.name);
+  const [exportingFormat, setExportingFormat] = useState<"markdown" | "json" | null>(null);
+
+  const handleExportMemos = async (format: "markdown" | "json") => {
+    setExportingFormat(format);
+    try {
+      await memoServiceClient.exportMemos(format);
+      toast.success(t("setting.preference.export-success"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("setting.preference.export-failed"));
+    } finally {
+      setExportingFormat(null);
+    }
+  };
 
   const handleLocaleSelectChange = (locale: Locale) => {
     // Apply locale immediately for instant UI feedback and persist to localStorage
@@ -108,6 +126,23 @@ const PreferencesSection = () => {
                   ))}
               </SelectContent>
             </Select>
+          </SettingListItem>
+        </SettingList>
+      </SettingGroup>
+
+      <SettingGroup title={t("setting.preference.export-title")} description={t("setting.preference.export-description")} showSeparator>
+        <SettingList>
+          <SettingListItem label={t("setting.preference.export-label")} description={t("setting.preference.export-help")}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" disabled={exportingFormat !== null} onClick={() => handleExportMemos("markdown")}>
+                <DownloadIcon className="mr-1.5 size-4" />
+                {t("setting.preference.export-markdown")}
+              </Button>
+              <Button variant="outline" size="sm" disabled={exportingFormat !== null} onClick={() => handleExportMemos("json")}>
+                <DownloadIcon className="mr-1.5 size-4" />
+                {t("setting.preference.export-json")}
+              </Button>
+            </div>
           </SettingListItem>
         </SettingList>
       </SettingGroup>

@@ -420,4 +420,41 @@ describe("MemoBody tag positioning", () => {
       rectSpy.mockRestore();
     }
   });
+
+  it("never turns URL hash routes like #/pos or #/guest into tags or truncates link text when folded", () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 600,
+      height: 900,
+      top: 0,
+      left: 0,
+      bottom: 900,
+      right: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    try {
+      const { container } = renderMemoBody(
+        {
+          content: "浏览器固定打开：http://localhost:1520/#/pos\n副屏：http://localhost:1520/#/guest\n以及独立写法 #/pos #/guest #项目",
+          tags: ["项目"],
+          attachments: [],
+        },
+        {},
+        true,
+      );
+
+      const contentEl = container.querySelector("[data-memo-content]")!;
+      expect(contentEl.textContent).toContain("http://localhost:1520/#/pos");
+      expect(contentEl.textContent).toContain("http://localhost:1520/#/guest");
+      expect(contentEl.textContent).toContain("#/pos #/guest");
+      expect(contentEl.querySelectorAll("[data-tag]")).toHaveLength(0);
+
+      const memoTagsEl = screen.getByTestId("memo-tags");
+      expect(Array.from(memoTagsEl.querySelectorAll("[data-tag]")).map((el) => el.getAttribute("data-tag"))).toEqual(["项目"]);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
 });

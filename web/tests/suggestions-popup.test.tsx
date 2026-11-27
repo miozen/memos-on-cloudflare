@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SuggestionsPopup } from "@/components/MemoEditor/Editor/SuggestionsPopup";
+import { useSuggestions } from "@/components/MemoEditor/Editor/useSuggestions";
 
 describe("SuggestionsPopup width and positioning", () => {
   beforeEach(() => {
@@ -73,6 +75,87 @@ describe("SuggestionsPopup width and positioning", () => {
       } else {
         delete (HTMLElement.prototype as { offsetWidth?: unknown }).offsetWidth;
       }
+    }
+  });
+
+  it("prevents textarea blur on option mouseDown and ignores Enter while IME is composing", () => {
+    const onSelect = vi.fn();
+    render(
+      <SuggestionsPopup
+        position={{ left: 0, top: 10, height: 20 }}
+        suggestions={["日常"]}
+        selectedIndex={0}
+        onItemSelect={onSelect}
+        getItemKey={(tag) => tag}
+        renderItem={(tag) => `#${tag}`}
+      />,
+    );
+
+    const item = screen.getByText("#日常");
+    const mouseDownEvt = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    item.dispatchEvent(mouseDownEvt);
+    expect(mouseDownEvt.defaultPrevented).toBe(true);
+    expect(onSelect).toHaveBeenCalledWith("日常");
+
+    const onAutocomplete = vi.fn();
+    function TestEditor() {
+      const editorRef = useRef<HTMLTextAreaElement>(null);
+      const actionsRef = useRef({
+        getEditor: () => editorRef.current,
+        focus: vi.fn(),
+        scrollToCursor: vi.fn(),
+        insertText: vi.fn(),
+        removeText: vi.fn(),
+        setContent: vi.fn(),
+        getSelectedContent: () => "",
+        getContent: () => "",
+        getCursorPosition: () => 0,
+        setCursorPosition: vi.fn(),
+        getCursorLineNumber: () => 0,
+        getLine: () => "",
+        setLine: vi.fn(),
+      });
+      const { isVisible } = useSuggestions({
+        editorRef,
+        editorActions: actionsRef,
+        triggerChar: "#",
+        items: ["日常", "技术"],
+        filterItems: (items, q) => items.filter((item) => item.includes(q)),
+        onAutocomplete,
+      });
+      return (
+        <div>
+          <textarea ref={editorRef} data-testid="ime-editor" />
+          <span data-testid="visible">{String(isVisible)}</span>
+        </div>
+      );
+    }
+
+    render(<TestEditor />);
+    const textarea = screen.getByTestId("ime-editor") as HTMLTextAreaElement;
+    textarea.value = "#日";
+    textarea.selectionStart = 2;
+    textarea.selectionEnd = 2;
+    fireEvent.input(textarea);
+    expect(screen.getByTestId("visible").textContent).toBe("true");
+
+    fireEvent.compositionStart(textarea);
+    const imeEnter = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, bubbles: true, cancelable: true });
+    Object.defineProperty(imeEnter, "isComposing", { value: true });
+    textarea.dispatchEvent(imeEnter);
+    expect(onAutocomplete).not.toHaveBeenCalled();
+
+    // Safari race: Enter immediately (<100ms) after compositionend is also ignored.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10000);
+      fireEvent.compositionEnd(textarea);
+      vi.advanceTimersByTime(10);
+      const postCompositionEnter = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+      textarea.dispatchEvent(postCompositionEnter);
+      expect(onAutocomplete).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

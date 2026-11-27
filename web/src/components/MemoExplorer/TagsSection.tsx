@@ -17,18 +17,21 @@ const TagsSection = (props: Props) => {
   const { getFiltersByFactor, addFilter, removeFilter } = useMemoFilterContext();
   const [treeMode, setTreeMode] = useLocalStorage<boolean>("tag-view-as-tree", false);
   const [treeAutoExpand, setTreeAutoExpand] = useLocalStorage<boolean>("tag-tree-auto-expand", false);
+  const [multiSelectMode, setMultiSelectMode] = useLocalStorage<boolean>("tag-multi-select", false);
 
   const tags = Object.entries(props.tagCount)
     .sort((a, b) => a[0].localeCompare(b[0]))
     .sort((a, b) => b[1] - a[1]);
 
-  const handleTagClick = (tag: string) => {
+  const handleTagClick = (tag: string, event?: React.MouseEvent) => {
+    const isAdditive = Boolean(multiSelectMode || event?.ctrlKey || event?.metaKey || event?.shiftKey);
     const isActive = getFiltersByFactor("tagSearch").some((filter: MemoFilter) => filter.value === tag);
     if (isActive) {
       removeFilter((f: MemoFilter) => f.factor === "tagSearch" && f.value === tag);
     } else {
-      // Remove all existing tag filters first, then add the new one
-      removeFilter((f: MemoFilter) => f.factor === "tagSearch");
+      if (!isAdditive) {
+        removeFilter((f: MemoFilter) => f.factor === "tagSearch");
+      }
       addFilter({
         factor: "tagSearch",
         value: tag,
@@ -54,13 +57,17 @@ const TagsSection = (props: Props) => {
                 <span className="text-sm shrink-0">{t("common.auto-expand")}</span>
                 <Switch disabled={!treeMode} checked={treeAutoExpand} onCheckedChange={(checked) => setTreeAutoExpand(checked)} />
               </div>
+              <div className="w-auto flex flex-row justify-between items-center gap-2 p-1">
+                <span className="text-sm shrink-0">{t("tag.multi-select")}</span>
+                <Switch checked={Boolean(multiSelectMode)} onCheckedChange={(checked) => setMultiSelectMode(checked)} />
+              </div>
             </PopoverContent>
           </Popover>
         )}
       </div>
       {tags.length > 0 ? (
         treeMode ? (
-          <TagTree tagAmounts={tags} expandSubTags={!!treeAutoExpand} />
+          <TagTree tagAmounts={tags} expandSubTags={!!treeAutoExpand} multiSelect={Boolean(multiSelectMode)} />
         ) : (
           <div className="w-full flex flex-row justify-start items-center relative flex-wrap gap-x-2 gap-y-1.5">
             {tags.map(([tag, amount]) => {
@@ -73,7 +80,7 @@ const TagsSection = (props: Props) => {
                     "hover:opacity-80",
                     isActive ? "text-primary" : "text-muted-foreground",
                   )}
-                  onClick={() => handleTagClick(tag)}
+                  onClick={(e) => handleTagClick(tag, e)}
                 >
                   <HashIcon className="w-4 h-auto shrink-0" />
                   <div className="inline-flex flex-nowrap ml-0.5 gap-0.5 max-w-[calc(100%-16px)]">

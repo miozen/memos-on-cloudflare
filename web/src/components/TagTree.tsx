@@ -13,9 +13,10 @@ interface Tag {
 interface Props {
   tagAmounts: [tag: string, amount: number][];
   expandSubTags: boolean;
+  multiSelect?: boolean;
 }
 
-const TagTree = ({ tagAmounts: rawTagAmounts, expandSubTags }: Props) => {
+const TagTree = ({ tagAmounts: rawTagAmounts, expandSubTags, multiSelect = false }: Props) => {
   const [tags, setTags] = useState<Tag[]>([]);
 
   useEffect(() => {
@@ -74,7 +75,7 @@ const TagTree = ({ tagAmounts: rawTagAmounts, expandSubTags }: Props) => {
   return (
     <div className="flex flex-col justify-start items-start relative w-full h-auto flex-nowrap gap-2 mt-1">
       {tags.map((t, idx) => (
-        <TagItemContainer key={t.text + "-" + idx} tag={t} expandSubTags={expandSubTags} />
+        <TagItemContainer key={t.text + "-" + idx} tag={t} expandSubTags={expandSubTags} multiSelect={multiSelect} />
       ))}
     </div>
   );
@@ -83,10 +84,11 @@ const TagTree = ({ tagAmounts: rawTagAmounts, expandSubTags }: Props) => {
 interface TagItemContainerProps {
   tag: Tag;
   expandSubTags: boolean;
+  multiSelect?: boolean;
 }
 
 const TagItemContainer = (props: TagItemContainerProps) => {
-  const { tag, expandSubTags } = props;
+  const { tag, expandSubTags, multiSelect = false } = props;
   const { getFiltersByFactor, addFilter, removeFilter } = useMemoFilterContext();
   const tagFilters = getFiltersByFactor("tagSearch");
   const isActive = tagFilters.some((f: MemoFilter) => f.value === tag.text);
@@ -97,12 +99,14 @@ const TagItemContainer = (props: TagItemContainerProps) => {
     toggleSubTags(expandSubTags);
   }, [expandSubTags]);
 
-  const handleTagClick = () => {
+  const handleTagClick = (event?: React.MouseEvent) => {
+    const isAdditive = Boolean(multiSelect || event?.ctrlKey || event?.metaKey || event?.shiftKey);
     if (isActive) {
       removeFilter((f: MemoFilter) => f.factor === "tagSearch" && f.value === tag.text);
     } else {
-      // Remove all existing tag filters first, then add the new one
-      removeFilter((f: MemoFilter) => f.factor === "tagSearch");
+      if (!isAdditive) {
+        removeFilter((f: MemoFilter) => f.factor === "tagSearch");
+      }
       addFilter({
         factor: "tagSearch",
         value: tag.text,
@@ -122,7 +126,7 @@ const TagItemContainer = (props: TagItemContainerProps) => {
           className={`flex flex-row justify-start items-center truncate shrink leading-5 mr-1 cursor-pointer transition-colors ${
             isActive ? "text-primary" : "text-muted-foreground"
           }`}
-          onClick={handleTagClick}
+          onClick={(e) => handleTagClick(e)}
         >
           <HashIcon className="w-4 h-auto shrink-0 mr-1" />
           <span className={`truncate hover:opacity-80 ${isActive ? "font-medium" : ""}`}>
@@ -149,7 +153,7 @@ const TagItemContainer = (props: TagItemContainerProps) => {
           }`}
         >
           {tag.subTags.map((st, idx) => (
-            <TagItemContainer key={st.text + "-" + idx} tag={st} expandSubTags={expandSubTags} />
+            <TagItemContainer key={st.text + "-" + idx} tag={st} expandSubTags={expandSubTags} multiSelect={multiSelect} />
           ))}
         </div>
       ) : null}
