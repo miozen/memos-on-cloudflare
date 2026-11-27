@@ -220,9 +220,41 @@ test("when user already selected primary category, prompt locks it and provides 
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.deepEqual(body.tags, ["技术/Cloudflare"]);
-  assert.ok(capturedUserPrompt.includes("用户已选一级分类（不可替换）: 技术"));
+  assert.ok(capturedUserPrompt.includes("用户已选一级分类（保留勿替换，优先在该分类下选或提炼二级标签）: 技术"));
   assert.ok(capturedUserPrompt.includes("技术/Cloudflare"));
   assert.equal(capturedUserPrompt.includes("项目/Memos"), false);
+});
+
+test("disables thinking for Qwen 3.8 / GLM-4.7 and retries cleanly if chat_template_kwargs is rejected", async () => {
+  await request("/api/v1/instance/settings/AI", {
+    method: "PATCH",
+    ...asUser("alice", {
+      value: JSON.stringify({ providers: [], tagSuggestion: { model: "@cf/qwen/qwen3.8-27b" } }),
+    }),
+  });
+
+  const capturedPayloads = [];
+  env.AI = {
+    async run(_model, input) {
+      capturedPayloads.push(input);
+      if (input.chat_template_kwargs) {
+        throw new Error("Unsupported chat_template_kwargs");
+      }
+      return { choices: [{ message: { content: '["技术/Cloudflare"]' } }] };
+    },
+  };
+
+  const res = await request("/api/v1/ai/suggestTags", {
+    method: "POST",
+    ...asUser("alice", { content: "测试 Qwen 3.8 关闭思考与兼容重试" }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.source, "ai");
+  assert.deepEqual(body.tags, ["技术/Cloudflare"]);
+  assert.equal(capturedPayloads.length, 2);
+  assert.deepEqual(capturedPayloads[0].chat_template_kwargs, { enable_thinking: false });
+  assert.equal(capturedPayloads[1].chat_template_kwargs, undefined);
 });
 
 test("Workers AI model setting persists via instance AI setting, takes effect immediately, and handles invalid config/errors safely", async () => {

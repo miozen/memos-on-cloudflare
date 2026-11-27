@@ -5,7 +5,6 @@ import * as settingDB from "../db/setting";
 import {
   DEFAULT_PKM_TAG_NAMES,
   DEFAULT_PKM_TAG_SET,
-  PKM_CATEGORY_BOUNDARIES,
   PKM_CATEGORY_SPECS,
 } from "../default-tags";
 import { extractMemoTags, isValidTagText } from "../tags";
@@ -373,60 +372,84 @@ function buildTagSuggestionPrompts(
   );
 
   const categoryReference = PKM_CATEGORY_SPECS.map(
-    (spec) => `- ${spec.name}（${spec.basis}，粒度参考：${spec.granularityExamples.join("、")}）`,
-  ).join("\n");
-
-  const boundaryReference = PKM_CATEGORY_BOUNDARIES.map((line) => `- ${line}`).join("\n");
+    (spec) => `${spec.name}（${spec.basis}，如 ${spec.granularityExamples.slice(0, 2).join("/")}）`,
+  ).join("、");
 
   const systemPrompt = [
-    "你是个人知识库（Memos）的标签归类助手。请为当前笔记推荐 1～3 个最合适的标签。",
+    "你是个人笔记标签助手，请为笔记推荐 1～3 个中文或常见英文标签。",
     "",
-    "【固定 12 个一级分类及粒度参考（示例仅解释分类粒度，不是预先存在的标签清单）】",
-    categoryReference,
+    `固定一级分类（共12个）：${categoryReference}。`,
     "",
-    "【相近分类语义边界】",
-    boundaryReference,
+    "归类建议：",
+    "1. 只要笔记有明确主题、技术产品、项目名或具体场景，优先推荐「一级/二级」（如 技术/Cloudflare、项目/谱匠、日常/生活感悟）；只有零碎无主题随笔才只给一级标签。",
+    "2. 优先复用下方“已有二级标签”里相近或同系列的标签（如 Workers/D1/R2 都复用 技术/Cloudflare）。",
+    "3. 需要新建时，提炼一个简短、通用、以后能继续用的主题词，最多一个 /（不要三级）。",
+    "4. 常见区分：通用技术/工具归「技术」，自己推进的独立项目归「项目」；零星消费体验归「日常」，理财/账目/成本归「财务」。",
     "",
-    "【决策优先级（严格遵守）】",
-    "1. 精确复用：已有二级标签准确匹配笔记主题时，直接复用。",
-    "2. 语义复用：已有近义或上位二级标签可合理覆盖时（如 Cloudflare D1/R2/Workers 复用 技术/Cloudflare，不要新造 技术/CF），优先复用。",
-    "3. 谨慎新建：确无合适已有二级标签，且当前主题独立、通用、长期稳定、高度概括（不含日期/版本号/一次性报错状态），才新建二级标签。",
-    "4. 保留一级：内容偏随手记录或暂不需要二级细分时，仅推荐一级标签。",
-    "",
-    "【硬性约束】",
-    "- 一级分类必须且只能是上述 12 个之一；禁止三级及以上标签（最多一个 /）。",
-    "- 每条笔记推荐 1～3 个标签；每次最多新增 1 个二级标签；不强制生成二级标签。",
-    "- 如果用户已选择一级标签，不得擅自替换该分类，应优先围绕该分类补充或推荐合适的二级标签。",
-    "- 不要重复笔记正文中已有的相同标签。",
-    "- 只输出合法 JSON，不要输出思考过程、Markdown 代码块或任何额外解释。",
-    '输出格式：{"tags":[{"tag":"技术/Cloudflare","action":"reuse"}]}，action 取值为 reuse | new | primary。',
+    '仅返回 JSON 字符串数组（不要加 # 或多余文字），例如：["技术/Cloudflare"]',
   ].join("\n");
 
   const existingTagLines: string[] = [];
   if (lockedRoots.length > 0) {
-    existingTagLines.push(`用户已选一级分类（不可替换）: ${lockedRoots.join("、")}`);
-    existingTagLines.push("对应一级分类下当前真实存在的全部二级标签：");
+    existingTagLines.push(`用户已选一级分类（保留勿替换，优先在该分类下选或提炼二级标签）: ${lockedRoots.join("、")}`);
     for (const root of lockedRoots) {
       const subs = tagIndex.secondaryByRoot.get(root) ?? [];
-      existingTagLines.push(`- ${root}: ${subs.length > 0 ? subs.join(", ") : "（暂无二级标签）"}`);
+      existingTagLines.push(`- ${root} 已有二级标签: ${subs.length > 0 ? subs.join(", ") : "暂无"}`);
     }
   } else {
-    existingTagLines.push("当前用户库中真实存在的全部二级标签（按一级分类分组）：");
+    const populatedLines: string[] = [];
     for (const root of DEFAULT_PKM_TAG_NAMES) {
       const subs = tagIndex.secondaryByRoot.get(root) ?? [];
-      existingTagLines.push(`- ${root}: ${subs.length > 0 ? subs.join(", ") : "（暂无）"}`);
+      if (subs.length > 0) {
+        populatedLines.push(`- ${root}: ${subs.join(", ")}`);
+      }
+    }
+    if (populatedLines.length > 0) {
+      existingTagLines.push("已有二级标签（优先复用）：", ...populatedLines);
+    } else {
+      existingTagLines.push("已有二级标签：暂无（请根据笔记主题自然提炼）");
     }
   }
 
   const userPrompt = [
     ...existingTagLines,
-    `笔记正文中已包含的标签: ${contentTags.length > 0 ? contentTags.join(", ") : "无"}`,
+    `正文已有标签: ${contentTags.length > 0 ? contentTags.join(", ") : "无"}`,
     "",
     "笔记正文：",
     content.slice(0, 3000),
   ].join("\n");
 
   return { systemPrompt, userPrompt };
+}
+
+async function runTagSuggestionAi(
+  ai: Ai,
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+): Promise<unknown> {
+  const basePayload = {
+    messages,
+    max_tokens: 512,
+    temperature: 0.2,
+  };
+
+  const supportsThinkingToggle = model === "@cf/qwen/qwen3.8-27b" || model === "@cf/zai-org/glm-4.7-flash";
+  if (!supportsThinkingToggle) {
+    return ai.run(model as any, basePayload as any);
+  }
+
+  try {
+    return await ai.run(
+      model as any,
+      {
+        ...basePayload,
+        chat_template_kwargs: { enable_thinking: false },
+      } as any,
+    );
+  } catch (error) {
+    console.warn(`Retrying ${model} without chat_template_kwargs`, error);
+    return ai.run(model as any, basePayload as any);
+  }
 }
 
 aiRoutes.post("/suggestTags", authRequired, async (c) => {
@@ -454,14 +477,10 @@ aiRoutes.post("/suggestTags", authRequired, async (c) => {
   if (c.env.AI && typeof c.env.AI.run === "function") {
     try {
       const { systemPrompt, userPrompt } = buildTagSuggestionPrompts(content, contentTags, tagIndex);
-      const result = await c.env.AI.run(model as any, {
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 1024,
-        temperature: 0.15,
-      });
+      const result = await runTagSuggestionAi(c.env.AI, model, [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ]);
 
       const responseText = extractTextFromAiResult(result);
       if (!responseText.trim()) {
