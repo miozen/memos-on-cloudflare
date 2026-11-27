@@ -98,7 +98,7 @@ function makeAttachment(overrides: Partial<Attachment>): Attachment {
   });
 }
 
-function renderMemoBody(memoOverrides: Partial<Memo>, contextOverrides: Partial<MemoViewContextValue> = {}) {
+function renderMemoBody(memoOverrides: Partial<Memo>, contextOverrides: Partial<MemoViewContextValue> = {}, compact = false) {
   const memo = create(MemoSchema, {
     name: "memos/memo-1",
     content: "",
@@ -128,7 +128,7 @@ function renderMemoBody(memoOverrides: Partial<Memo>, contextOverrides: Partial<
   return render(
     <MentionResolutionProvider contents={[]}>
       <MemoViewContext.Provider value={value}>
-        <MemoBody compact={false} />
+        <MemoBody compact={compact} />
       </MemoViewContext.Provider>
     </MentionResolutionProvider>,
   );
@@ -342,5 +342,82 @@ describe("MemoBody tag positioning", () => {
 
     const tag = container.querySelector('[data-tag="工作"]');
     expect(tag).toBeInTheDocument();
+  });
+
+  it("places tags outside collapsible MemoContent below show-more and show-less without duplication", () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 600,
+      height: 900,
+      top: 0,
+      left: 0,
+      bottom: 900,
+      right: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    try {
+      const { container } = renderMemoBody(
+        {
+          content: "很长的笔记正文第一段\n\n很长的笔记正文最后一段\n#资料 #日常",
+          tags: ["资料", "日常"],
+          attachments: [],
+        },
+        {},
+        true,
+      );
+
+      const contentEl = container.querySelector("[data-memo-content]")!;
+      const showMoreBtn = screen.getByRole("button", { name: "memo.show-more" });
+      const memoTagsEl = screen.getByTestId("memo-tags");
+
+      expect(contentEl.querySelectorAll("[data-tag]")).toHaveLength(0);
+      expect(isBeforeInDom(showMoreBtn, memoTagsEl)).toBe(true);
+      expect(Array.from(memoTagsEl.querySelectorAll("[data-tag]")).map((el) => el.getAttribute("data-tag"))).toEqual(["资料", "日常"]);
+
+      fireEvent.click(showMoreBtn);
+
+      const showLessBtn = screen.getByRole("button", { name: "memo.show-less" });
+      const expandedTagsEl = screen.getByTestId("memo-tags");
+      expect(container.querySelector("[data-memo-content]")!.querySelectorAll("[data-tag]")).toHaveLength(0);
+      expect(isBeforeInDom(showLessBtn, expandedTagsEl)).toBe(true);
+      expect(expandedTagsEl.querySelectorAll("[data-tag]")).toHaveLength(2);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("keeps tags solely below visual attachments even when MemoContent is collapsible", () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 600,
+      height: 900,
+      top: 0,
+      left: 0,
+      bottom: 900,
+      right: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    try {
+      renderMemoBody(
+        {
+          content: "很长的图文笔记内容\n#资料",
+          tags: ["资料"],
+          attachments: [makeAttachment({ name: "attachments/1", filename: "photo.jpg", type: "image/jpeg" })],
+        },
+        {},
+        true,
+      );
+
+      const imgEl = screen.getByRole("img", { name: "photo.jpg" });
+      const allTagContainers = screen.getAllByTestId("memo-tags");
+      expect(allTagContainers).toHaveLength(1);
+      expect(isBeforeInDom(imgEl, allTagContainers[0])).toBe(true);
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 });

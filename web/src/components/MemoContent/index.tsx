@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useTranslate } from "@/utils/i18n";
 import { extractMentionUsernames } from "@/utils/remark-plugins/remark-mention";
@@ -11,7 +11,7 @@ import { useResolvedMentionUsernames } from "./MentionResolutionContext";
 import type { MemoContentProps } from "./types";
 
 const MemoContent = (props: MemoContentProps) => {
-  const { className, contentClassName, content, hideTags = false, onClick, onDoubleClick } = props;
+  const { className, contentClassName, content, hideTags = false, onCompactModeChange, onClick, onDoubleClick } = props;
   const t = useTranslate();
   const {
     containerRef: memoContentContainerRef,
@@ -23,6 +23,10 @@ const MemoContent = (props: MemoContentProps) => {
   const hasVisibleContent = useMemo(() => (hideTags ? hasNonTagMarkdownContent(content) : true), [content, hideTags]);
 
   const compactLabel = useCompactLabel(showCompactMode, t as (key: string) => string);
+
+  useEffect(() => {
+    onCompactModeChange?.(showCompactMode !== undefined);
+  }, [onCompactModeChange, showCompactMode]);
 
   if (hideTags && !hasVisibleContent) {
     return null;

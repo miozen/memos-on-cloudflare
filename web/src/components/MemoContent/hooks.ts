@@ -7,7 +7,11 @@ export const useCompactMode = (enabled: boolean) => {
   const [mode, setMode] = useState<ContentCompactView | undefined>(undefined);
 
   useEffect(() => {
-    if (!enabled || !containerRef.current) return;
+    if (!enabled) {
+      setMode(undefined);
+      return;
+    }
+    if (!containerRef.current) return;
     const maxHeight = getMaxDisplayHeight();
     if (containerRef.current.getBoundingClientRect().height > maxHeight) {
       setMode("ALL");

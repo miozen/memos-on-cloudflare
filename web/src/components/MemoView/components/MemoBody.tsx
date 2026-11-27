@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AttachmentListView, LocationDisplayView, RelationListView } from "@/components/MemoMetadata";
 import { hasVisualAttachments } from "@/components/MemoMetadata/Attachment/attachmentHelpers";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,13 @@ const MemoBody: React.FC<MemoBodyProps> = ({ compact }) => {
 
   const referencedMemos = memo.relations.filter((relation) => relation.type === MemoRelation_Type.REFERENCE);
   const hasVisual = hasVisualAttachments(memo.attachments);
+  const [isContentCollapsible, setIsContentCollapsible] = useState(false);
+
+  useEffect(() => {
+    setIsContentCollapsible(false);
+  }, [memo.name, memo.updateTime]);
+
+  const hideInlineTags = hasVisual || isContentCollapsible;
 
   return (
     <>
@@ -43,11 +51,13 @@ const MemoBody: React.FC<MemoBodyProps> = ({ compact }) => {
         <MemoContent
           key={`${memo.name}-${memo.updateTime}`}
           content={memo.content}
-          hideTags={hasVisual}
+          hideTags={hideInlineTags}
+          onCompactModeChange={setIsContentCollapsible}
           onClick={handleMemoContentClick}
           onDoubleClick={handleMemoContentDoubleClick}
           compact={memo.pinned ? false : compact} // Always show full content when pinned
         />
+        {!hasVisual && isContentCollapsible && <MemoTags tags={memo.tags} />}
         <AttachmentListView attachments={memo.attachments} onImagePreview={openPreview} />
         {hasVisual && <MemoTags tags={memo.tags} />}
         <RelationListView relations={referencedMemos} currentMemoName={memo.name} parentPage={parentPage} />
