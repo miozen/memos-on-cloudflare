@@ -7,7 +7,7 @@ describe("SuggestionsPopup width and positioning", () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
-  it("enforces minimum width and scrollbar-gutter so short tags are not truncated by scrollbars", () => {
+  it("sizes to content with compact min-width, elastic width, and scrollbar-gutter", () => {
     render(
       <SuggestionsPopup
         position={{ left: 0, top: 10, height: 20 }}
@@ -21,7 +21,8 @@ describe("SuggestionsPopup width and positioning", () => {
 
     const firstItem = screen.getByText("#日常");
     const popup = firstItem.parentElement as HTMLDivElement;
-    expect(popup.className).toContain("min-w-44");
+    expect(popup.className).toContain("w-max");
+    expect(popup.className).toContain("min-w-24");
     expect(popup.className).toContain("[scrollbar-gutter:stable]");
     expect(popup.style.left).toBe("0px");
   });

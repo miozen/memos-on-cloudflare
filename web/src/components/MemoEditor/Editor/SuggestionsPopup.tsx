@@ -13,7 +13,7 @@ interface SuggestionsPopupProps<T> {
 
 const POPUP_STYLES = {
   container:
-    "z-20 absolute p-1 mt-1 -ml-2 min-w-44 max-w-[min(18rem,calc(100%-0.5rem))] max-h-60 rounded border bg-popover text-popover-foreground shadow-lg font-mono flex flex-col overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
+    "z-20 absolute p-1 mt-1 -ml-2 w-max min-w-24 max-w-[min(18rem,calc(100%-0.5rem))] max-h-60 rounded border bg-popover text-popover-foreground shadow-lg font-mono flex flex-col overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
   item: "rounded p-1 px-2 w-full min-w-0 text-sm cursor-pointer transition-colors select-none hover:bg-accent hover:text-accent-foreground",
 };
 
