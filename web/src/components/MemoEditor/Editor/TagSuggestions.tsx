@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { matchPath } from "react-router-dom";
 import OverflowTip from "@/components/kit/OverflowTip";
 import { useTagCounts } from "@/hooks/useUserQueries";
+import { DEFAULT_PKM_TAG_NAMES } from "@/lib/default-tags";
 import { Routes } from "@/router";
 import type { TagSuggestionsProps } from "../types";
 import { SuggestionsPopup } from "./SuggestionsPopup";
@@ -13,9 +14,12 @@ export default function TagSuggestions({ editorRef, editorActions }: TagSuggesti
   const { data: tagCount = {} } = useTagCounts(!isExplorePage);
 
   const sortedTags = useMemo(() => {
-    return Object.entries(tagCount as Record<string, number>)
+    const usedTags = Object.entries(tagCount as Record<string, number>)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([tag]) => tag);
+    const seen = new Set(usedTags);
+    const presetExtras = DEFAULT_PKM_TAG_NAMES.filter((tag) => !seen.has(tag));
+    return [...usedTags, ...presetExtras];
   }, [tagCount]);
 
   const { position, suggestions, selectedIndex, isVisible, handleItemSelect } = useSuggestions({

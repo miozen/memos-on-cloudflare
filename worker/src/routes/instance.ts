@@ -6,6 +6,7 @@ import * as userDB from "../db/user";
 import { getAppVersion } from "../version";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
 import { sendResendEmail } from "../notification";
+import { ensureDefaultTagsSetting, isInternalSystemSettingName } from "../default-tags";
 
 type InstApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -107,6 +108,8 @@ instanceRoutes.get("/settings", authRequired, async (c) => {
     return c.json({ error: "Admin only" }, 403);
   }
 
+  await ensureDefaultTagsSetting(c.env.DB, c.env.CACHE);
+
   const cached = await getCachedJson(c.env.CACHE, "instance:settings");
   if (cached) {
     return c.json(cached);
@@ -114,10 +117,12 @@ instanceRoutes.get("/settings", authRequired, async (c) => {
 
   const settings = await settingDB.listSystemSettings(c.env.DB);
   const response = {
-    settings: settings.map((setting) => ({
-      ...setting,
-      name: settingDB.normalizeInstanceSettingName(setting.name),
-    })),
+    settings: settings
+      .filter((setting) => !isInternalSystemSettingName(setting.name))
+      .map((setting) => ({
+        ...setting,
+        name: settingDB.normalizeInstanceSettingName(setting.name),
+      })),
   };
 
   await putCachedJson(c.env.CACHE, "instance:settings", response, 300);
@@ -128,11 +133,18 @@ instanceRoutes.get("/settings", authRequired, async (c) => {
 instanceRoutes.get("/settings/*", authOptional, async (c) => {
   const fullPath = c.req.path;
   const name = settingDB.normalizeInstanceSettingName(fullPath.replace("/api/v1/instance/settings/", ""));
+  if (isInternalSystemSettingName(name)) {
+    return c.json({ error: "Setting not found" }, 404);
+  }
   const key = getInstanceSettingKey(name);
   const currentUser = c.get("user");
   const isAdmin = currentUser?.role === "ADMIN";
   if (!PUBLIC_INSTANCE_SETTING_KEYS.has(key) && !isAdmin) {
     return c.json({ error: "Admin only" }, 403);
+  }
+
+  if (key === "TAGS") {
+    await ensureDefaultTagsSetting(c.env.DB, c.env.CACHE);
   }
 
   const cacheKey = key === "AI" ? `instance:setting:${name}:${isAdmin ? "admin" : "public"}` : `instance:setting:${name}`;
@@ -216,6 +228,9 @@ instanceRoutes.patch("/settings/*", authRequired, async (c) => {
 
   const fullPath = c.req.path;
   const name = settingDB.normalizeInstanceSettingName(fullPath.replace("/api/v1/instance/settings/", ""));
+  if (isInternalSystemSettingName(name)) {
+    return c.json({ error: "Setting not found" }, 404);
+  }
   const key = getInstanceSettingKey(name);
   const body = await c.req.json<{ value: string; description?: string }>();
   await settingDB.setSystemSetting(c.env.DB, name, body.value, body.description);

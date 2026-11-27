@@ -10,7 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { useInstance } from "@/contexts/InstanceContext";
 import { useTagCounts } from "@/hooks/useUserQueries";
 import { colorToHex } from "@/lib/color";
-import { isValidTagPattern } from "@/lib/tag";
+import { DEFAULT_PKM_TAGS } from "@/lib/default-tags";
+import { findTagMetadata, isValidTagPattern } from "@/lib/tag";
 import { cn } from "@/lib/utils";
 import {
   InstanceSetting_Key,
@@ -47,6 +48,19 @@ const toLocalTagMeta = (meta: {
   color: colorToHex(meta.backgroundColor),
   blur: meta.blurContent,
 });
+
+const buildTagsSetting = (localTags: Record<string, LocalTagMeta>) => {
+  const tags = Object.fromEntries(
+    Object.entries(localTags).map(([name, meta]) => [
+      name,
+      create(InstanceSetting_TagMetadataSchema, {
+        blurContent: meta.blur,
+        ...(meta.color ? { backgroundColor: hexToColor(meta.color) } : {}),
+      }),
+    ]),
+  );
+  return create(InstanceSetting_TagsSettingSchema, { tags });
+};
 
 const TagsSection = () => {
   const t = useTranslate();
@@ -126,24 +140,16 @@ const TagsSection = () => {
     setNewTagBlur(false);
   };
 
-  const handleSave = async () => {
-    const tags = Object.fromEntries(
-      Object.entries(localTags).map(([name, meta]) => [
-        name,
-        create(InstanceSetting_TagMetadataSchema, {
-          blurContent: meta.blur,
-          ...(meta.color ? { backgroundColor: hexToColor(meta.color) } : {}),
-        }),
-      ]),
-    );
+  const previewTagsSetting = useMemo(() => buildTagsSetting(localTags), [localTags]);
 
+  const handleSave = async () => {
     await saveInstanceSetting({
       key: InstanceSetting_Key.TAGS,
       setting: create(InstanceSettingSchema, {
         name: buildInstanceSettingName(InstanceSetting_Key.TAGS),
         value: {
           case: "tagsSetting",
-          value: create(InstanceSetting_TagsSettingSchema, { tags }),
+          value: previewTagsSetting,
         },
       }),
       errorContext: "Update tags setting",
@@ -277,6 +283,29 @@ const TagsSection = () => {
           {t("common.save")}
         </Button>
       </div>
+
+      <SettingGroup title={t("setting.tags.preset-title")} description={t("setting.tags.preset-description")} showSeparator>
+        <SettingPanel>
+          <div className="grid gap-2 px-3 py-3 sm:grid-cols-2">
+            {DEFAULT_PKM_TAGS.map((preset) => {
+              const matchedColor = colorToHex(findTagMetadata(preset.name, previewTagsSetting)?.backgroundColor);
+              return (
+                <div key={preset.name} className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-2.5 py-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={cn("size-2.5 shrink-0 rounded-full border border-border", !matchedColor && "bg-transparent")}
+                      style={matchedColor ? { backgroundColor: matchedColor } : undefined}
+                      aria-hidden
+                    />
+                    <span className="font-mono text-sm font-medium text-foreground">#{preset.name}</span>
+                  </div>
+                  <span className="truncate text-xs text-muted-foreground">{t(preset.purposeKey)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </SettingPanel>
+      </SettingGroup>
     </SettingSection>
   );
 };

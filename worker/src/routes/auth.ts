@@ -12,6 +12,7 @@ import { createErrorBody } from "../error";
 import { deleteCachedKeys } from "../cache";
 import { extractIdentityProviderUid } from "../idp";
 import { isUniqueConstraintError } from "../validation";
+import { ensureDefaultTagsSetting } from "../default-tags";
 import { formatUser } from "./users";
 
 type AuthApp = { Bindings: Env; Variables: { user: UserPayload } };
@@ -142,6 +143,10 @@ authRoutes.post("/signin", async (c) => {
         "INSERT INTO user_identity (user_id, provider, extern_uid) VALUES (?, ?, ?)"
       ).bind(user!.id, idpUid, oauthUser.identifier).run();
 
+      if (role === "ADMIN") {
+        await ensureDefaultTagsSetting(c.env.DB, c.env.CACHE);
+      }
+
       await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
     }
 
@@ -267,6 +272,9 @@ authRoutes.post("/signup", async (c) => {
   const { token: refreshToken } = await createRefreshToken(userPayload, tokenId, c.env.JWT_SECRET);
 
   setSessionCookies(c, refreshToken);
+  if (role === "ADMIN") {
+    await ensureDefaultTagsSetting(c.env.DB, c.env.CACHE);
+  }
   await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
 
   const formattedUser = formatUser(user as UserRow, { includeEmail: true });

@@ -764,7 +764,23 @@
       "tag-pattern-hint": "Tag name or regex pattern (e.g. project/.* matches all project/ tags)",
       "invalid-regex": "Invalid or unsafe regex pattern.",
       "used-count": "{{count}} memos",
-      "using-default-color": "Using default color."
+      "using-default-color": "Using default color.",
+      "preset-title": "Preset PKM tags",
+      "preset-description": "Reference list of the 12 built-in tags. Use them directly in memos as #tag without creating placeholder notes.",
+      "preset-purposes": {
+        "daily": "Daily life & quick notes",
+        "inspiration": "Ideas & creative sparks",
+        "todo": "Tasks & action items",
+        "reference": "Bookmarks, knowledge & articles",
+        "tech": "Software, coding, AI & networking",
+        "project": "Project development & planning",
+        "work": "Work, operations & business",
+        "finance": "Investments, expenses & accounts",
+        "clan": "Genealogy, history & family archives",
+        "family": "Home, household, relatives & friends",
+        "health": "Health, exercise & wellness",
+        "travel": "Travel, places & experiences"
+      }
     },
     "resource-stats": {
       "label": "Resources",

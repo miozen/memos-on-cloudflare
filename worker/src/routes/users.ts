@@ -13,6 +13,7 @@ import { buildIdentityProviderName, extractIdentityProviderUid } from "../idp";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
 import { getWebhookUrlValidationError, normalizeWebhookUrl } from "../webhook";
 import { chunkValues, createPlaceholders, isUniqueConstraintError, normalizeUserRoleInput, safeJsonParse } from "../validation";
+import { ensureDefaultTagsSetting } from "../default-tags";
 
 type UserApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -261,6 +262,7 @@ userRoutes.post("/", async (c) => {
     if ("conflict" in created) {
       return c.json({ error: "Username taken" }, 409);
     }
+    await ensureDefaultTagsSetting(c.env.DB, c.env.CACHE);
     await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
     return c.json(formatUser(created.user, { includeEmail: true }), 201);
   }

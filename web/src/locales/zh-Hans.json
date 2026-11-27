@@ -745,7 +745,23 @@
       "tag-pattern-hint": "标签名称或正则表达式模式（例如 project/.* 匹配所有 project/ 标签）",
       "invalid-regex": "无效或不安全的正则表达式模式。",
       "used-count": "{{count}} 条备忘录",
-      "using-default-color": "使用默认颜色。"
+      "using-default-color": "使用默认颜色。",
+      "preset-title": "预设标签体系",
+      "preset-description": "内置 12 个个人知识管理标签供参考；可直接在笔记中输入 #标签 使用，无需预先占位。",
+      "preset-purposes": {
+        "daily": "生活记录、随手记",
+        "inspiration": "想法、创意",
+        "todo": "需要处理的事情",
+        "reference": "收藏、知识、文章",
+        "tech": "软件、编程、AI、网络",
+        "project": "项目开发与规划",
+        "work": "工作、经营、商业",
+        "finance": "投资、消费、账目",
+        "clan": "族谱、历史、家族资料",
+        "family": "家庭、房屋、亲友",
+        "health": "健康、运动、养生",
+        "travel": "旅行、地点、见闻"
+      }
     },
     "resource-stats": {
       "label": "资源",
