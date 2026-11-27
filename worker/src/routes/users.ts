@@ -1,18 +1,18 @@
 import { Hono } from "hono";
 import type { Env, UserPayload } from "../types";
-import { authRequired, authOptional } from "../middleware/auth";
+import { authRequired, authOptional, resolveAuthUser } from "../middleware/auth";
 import * as userDB from "../db/user";
 import * as settingDB from "../db/setting";
 import * as memoDB from "../db/memo";
 import * as webhookDB from "../db/webhook";
 import { hashPassword } from "../auth/password";
 import { generatePAT, hashPAT } from "../auth/pat";
-import { findActiveUserPayload } from "../auth/user";
 import { exchangeOAuthCode } from "../auth/oauth";
 import { createErrorBody } from "../error";
 import { buildIdentityProviderName, extractIdentityProviderUid } from "../idp";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
 import { getWebhookUrlValidationError, normalizeWebhookUrl } from "../webhook";
+import { chunkValues, createPlaceholders, normalizeUserRoleInput, safeJsonParse } from "../validation";
 
 type UserApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -132,8 +132,8 @@ userRoutes.get("/:username/stats", authOptional, async (c) => {
   const pinnedMemos: number[] = [];
 
   for (const m of memos) {
-    const payload = JSON.parse(m.payload || "{}");
-    if (payload.tags) {
+    const payload = safeJsonParse<Record<string, any>>(m.payload, {});
+    if (Array.isArray(payload.tags)) {
       for (const tag of payload.tags) {
         tagCounts[tag] = (tagCounts[tag] || 0) + 1;
       }
@@ -179,8 +179,8 @@ userRoutes.get("/:action", authOptional, async (c) => {
     for (const memo of memos) {
       const stats = memoStatsByUserId.get(memo.creator_id) || { memoCount: 0, tagCount: {} };
       stats.memoCount += 1;
-      const payload = JSON.parse(memo.payload || "{}");
-      if (payload.tags) {
+      const payload = safeJsonParse<Record<string, any>>(memo.payload, {});
+      if (Array.isArray(payload.tags)) {
         for (const tag of payload.tags) {
           stats.tagCount[tag] = (stats.tagCount[tag] || 0) + 1;
         }
@@ -224,11 +224,14 @@ userRoutes.post("/", async (c) => {
   if (userCount === 0) {
     const body = await c.req.json();
     const userData = body.user || body;
-    const username = userData.username;
-    const password = userData.password;
+    const username = typeof userData.username === "string" ? userData.username.trim() : "";
+    const password = typeof userData.password === "string" ? userData.password : "";
 
     if (!username || !password) {
       return c.json({ error: "Username and password required" }, 400);
+    }
+    if (password.length < 6) {
+      return c.json({ error: "Password must be at least 6 characters" }, 400);
     }
 
     const passwordHash = await hashPassword(password);
@@ -242,22 +245,9 @@ userRoutes.post("/", async (c) => {
   const disallowRegistration = generalSetting.disallowUserRegistration === true;
   const disallowPasswordAuth = generalSetting.disallowPasswordAuth === true;
 
-  // Check auth header
-  const authHeader = c.req.header("Authorization");
-  let isAdmin = false;
-
-  if (authHeader?.startsWith("Bearer ")) {
-    const { verifyAccessToken } = await import("../auth/jwt");
-    let subject: string | undefined;
-    try {
-      const claims = await verifyAccessToken(authHeader.slice(7), c.env.JWT_SECRET);
-      subject = claims.sub;
-    } catch {}
-    if (subject) {
-      const currentUser = await findActiveUserPayload(c.env.DB, subject);
-      isAdmin = currentUser?.role === "ADMIN";
-    }
-  }
+  // Reuse full auth resolution (JWT + PAT + all supported token headers)
+  const actingUser = await resolveAuthUser(c.env.DB, c.env.JWT_SECRET, c.req);
+  const isAdmin = actingUser?.role === "ADMIN";
 
   // Admin can always create users; non-admin can self-register if allowed
   if (!isAdmin && (disallowRegistration || disallowPasswordAuth)) {
@@ -266,18 +256,25 @@ userRoutes.post("/", async (c) => {
 
   const body = await c.req.json();
   const userData = body.user || body;
-  const username = userData.username;
-  const password = userData.password;
+  const username = typeof userData.username === "string" ? userData.username.trim() : "";
+  const password = typeof userData.password === "string" ? userData.password : "";
 
   if (!username || !password) {
     return c.json({ error: "Username and password required" }, 400);
+  }
+  if (password.length < 6) {
+    return c.json({ error: "Password must be at least 6 characters" }, 400);
   }
 
   const existing = await userDB.findUserByUsername(c.env.DB, username);
   if (existing) return c.json({ error: "Username taken" }, 409);
 
   // Only admin can create admin users
-  const role = isAdmin && userData.role === 2 ? "ADMIN" : "USER";
+  const requestedRole = normalizeUserRoleInput(userData.role);
+  if (userData.role !== undefined && !requestedRole) {
+    return c.json({ error: "Invalid user role" }, 400);
+  }
+  const role = isAdmin && requestedRole === "ADMIN" ? "ADMIN" : "USER";
   const passwordHash = await hashPassword(password);
   const user = await userDB.createUser(c.env.DB, { username, passwordHash, role });
   await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public"]);
@@ -321,16 +318,37 @@ userRoutes.patch("/:username", authRequired, async (c) => {
   if (body.email !== undefined) updateData.email = body.email;
   if (body.avatarUrl !== undefined) updateData.avatar_url = body.avatarUrl;
   if (body.description !== undefined) updateData.description = body.description;
-  if (body.password) updateData.password_hash = await hashPassword(body.password);
-  if (body.role && currentUser.role === "ADMIN") updateData.role = body.role;
+  if (body.password) {
+    if (typeof body.password !== "string" || body.password.length < 6) {
+      return c.json({ error: "Password must be at least 6 characters" }, 400);
+    }
+    updateData.password_hash = await hashPassword(body.password);
+  }
+  if (body.role !== undefined && currentUser.role === "ADMIN") {
+    const normalizedRole = normalizeUserRoleInput(body.role);
+    if (!normalizedRole) {
+      return c.json({ error: "Invalid user role" }, 400);
+    }
+    updateData.role = normalizedRole;
+  }
   if (body.username !== undefined) {
+    const nextUsername = typeof body.username === "string" ? body.username.trim() : "";
+    if (!nextUsername) {
+      return c.json({ error: "Username is required" }, 400);
+    }
     if (currentUser.role === "ADMIN") {
-      updateData.username = body.username;
+      if (nextUsername !== user.username) {
+        const existingUser = await userDB.findUserByUsername(c.env.DB, nextUsername);
+        if (existingUser) {
+          return c.json({ error: "Username taken" }, 409);
+        }
+      }
+      updateData.username = nextUsername;
     } else if (user.id === currentUser.id) {
       if (generalSetting.disallowChangeUsername === true) {
         return c.json(createErrorBody("Changing username is disabled", { errorKey: "message.username-change-disabled" }), 403);
       }
-      if (body.username !== user.username) {
+      if (nextUsername !== user.username) {
         return c.json(createErrorBody("Changing username requires admin privileges", { errorKey: "message.username-change-admin-only" }), 403);
       }
     }
@@ -361,7 +379,62 @@ userRoutes.delete("/:username", authRequired, async (c) => {
   const user = await userDB.findUserByUsername(c.env.DB, username);
   if (!user) return c.json({ error: "User not found" }, 404);
 
+  const { results: userMemos } = await c.env.DB.prepare(
+    "SELECT id, uid FROM memo WHERE creator_id = ?"
+  ).bind(user.id).all<{ id: number; uid: string }>();
+  const memoIds = userMemos.map((m) => m.id);
+  const memoUids = userMemos.map((m) => m.uid);
+
+  const r2Keys = new Set<string>();
+  const { results: userAttachments } = await c.env.DB.prepare(
+    "SELECT reference FROM attachment WHERE creator_id = ?"
+  ).bind(user.id).all<{ reference: string }>();
+  for (const att of userAttachments) {
+    if (att.reference) r2Keys.add(att.reference);
+  }
+  for (const chunk of chunkValues(memoIds, 900)) {
+    const { results: memoAttachments } = await c.env.DB.prepare(
+      `SELECT reference FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`
+    ).bind(...chunk).all<{ reference: string }>();
+    for (const att of memoAttachments) {
+      if (att.reference) r2Keys.add(att.reference);
+    }
+  }
+  if (user.avatar_url?.startsWith("avatars/")) {
+    r2Keys.add(user.avatar_url);
+  }
+
+  for (const chunk of chunkValues(memoIds, 450)) {
+    const placeholders = createPlaceholders(chunk.length);
+    await c.env.DB.prepare(
+      `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
+    ).bind(...chunk, ...chunk).run();
+  }
+  for (const chunk of chunkValues(memoUids, 900)) {
+    await c.env.DB.prepare(
+      `DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`
+    ).bind(...chunk).run();
+  }
+  for (const chunk of chunkValues(memoIds, 900)) {
+    await c.env.DB.prepare(
+      `DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`
+    ).bind(...chunk).run();
+  }
+
+  await c.env.DB.prepare("DELETE FROM attachment WHERE creator_id = ?").bind(user.id).run();
+  await c.env.DB.prepare("DELETE FROM reaction WHERE creator_id = ?").bind(user.id).run();
+  await c.env.DB.prepare("DELETE FROM memo_share WHERE creator_id = ?").bind(user.id).run();
+  await c.env.DB.prepare("DELETE FROM memo WHERE creator_id = ?").bind(user.id).run();
+  await c.env.DB.prepare("DELETE FROM inbox WHERE sender_id = ? OR receiver_id = ?").bind(user.id, user.id).run();
+  await c.env.DB.prepare("DELETE FROM user_identity WHERE user_id = ?").bind(user.id).run();
+  await c.env.DB.prepare("DELETE FROM user_setting WHERE user_id = ?").bind(user.id).run();
+
   await userDB.deleteUser(c.env.DB, user.id);
+
+  if (r2Keys.size > 0) {
+    await Promise.allSettled([...r2Keys].map((key) => c.env.BUCKET.delete(key)));
+  }
+
   await deleteCachedKeys(c.env.CACHE, ["instance:profile", "user:stats:all", "user:stats:all:public", ...getUserStatsCacheKeys(user.username)]);
   return c.json({});
 });

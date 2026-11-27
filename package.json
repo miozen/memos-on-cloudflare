@@ -12,6 +12,9 @@
     "dev:web": "cd web && npm run dev",
     "build:web": "cd web && npm run build",
     "deploy": "npm run build:web && wrangler deploy",
+    "ci:build": "npm --prefix web ci && npx tsc --noEmit && npm test && npm --prefix web exec tsc -- --noEmit --skipLibCheck && npm --prefix web test && npm run build:web",
+    "ci:deploy": "node scripts/deploy-workers.mjs",
+    "ci:deploy:worker": "node scripts/deploy-workers.mjs --skip-migrations",
     "db:migrate": "wrangler d1 migrations apply cfmemos-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply cfmemos-db --remote"
   },

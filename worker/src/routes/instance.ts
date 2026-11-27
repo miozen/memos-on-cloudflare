@@ -5,6 +5,7 @@ import * as settingDB from "../db/setting";
 import * as userDB from "../db/user";
 import { getAppVersion } from "../version";
 import { deleteCachedKeys, getCachedJson, putCachedJson } from "../cache";
+import { sendResendEmail } from "../notification";
 
 type InstApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -161,11 +162,12 @@ instanceRoutes.post("/settings/notification\\:testEmail", authRequired, async (c
     return c.json({ error: "Admin only" }, 403);
   }
 
-  const body = await c.req.json<{ email?: { apiKey?: string; fromEmail?: string; fromName?: string }; recipientEmail?: string }>();
+  const body = await c.req.json<{ email?: { apiKey?: string; fromEmail?: string; fromName?: string; replyTo?: string }; recipientEmail?: string }>();
 
   let apiKey = body.email?.apiKey;
   let fromEmail = body.email?.fromEmail;
   let fromName = body.email?.fromName;
+  let replyTo = body.email?.replyTo;
 
   if (!apiKey || !fromEmail) {
     const setting = await settingDB.getInstanceSetting(c.env.DB, "NOTIFICATION");
@@ -175,6 +177,7 @@ instanceRoutes.post("/settings/notification\\:testEmail", authRequired, async (c
       if (!apiKey) apiKey = email.apiKey;
       if (!fromEmail) fromEmail = email.fromEmail;
       if (!fromName) fromName = email.fromName;
+      if (!replyTo) replyTo = email.replyTo;
     }
   }
 
@@ -187,25 +190,18 @@ instanceRoutes.post("/settings/notification\\:testEmail", authRequired, async (c
     return c.json({ error: "Recipient email is required" }, 400);
   }
 
-  const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: [recipientEmail],
-      subject: "Test email from Memos",
-      html: "<p>This is a test email sent from your Memos instance to verify the email configuration.</p>",
-    }),
+  const result = await sendResendEmail({
+    apiKey,
+    fromEmail,
+    fromName,
+    replyTo,
+    to: [recipientEmail],
+    subject: "Test email from Memos",
+    html: "<p>This is a test email sent from your Memos instance to verify the email configuration.</p>",
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    return c.json({ error: `Resend API error: ${err}` }, 502);
+  if (!result.ok) {
+    return c.json({ error: `Resend API error: ${result.errorText}` }, 502);
   }
 
   return c.json({});

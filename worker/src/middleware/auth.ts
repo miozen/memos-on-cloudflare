@@ -16,7 +16,7 @@ type PATLookupResult = {
   row_status: string;
 };
 
-function extractAuthToken(headers: {
+export function extractAuthToken(headers: {
   header: (name: string) => string | undefined;
 }): string | undefined {
   const authHeader = headers.header("Authorization");
@@ -94,71 +94,54 @@ export const authRequired = createMiddleware<AuthEnv>(async (c, next) => {
     return c.json({ code: 16, message: "user not found", details: [] }, 401);
   }
 
-  // Check if it's a PAT
-  if (token.startsWith("memos_pat_")) {
-    const hash = await hashPAT(token);
-    const result = await findUserByPATHash(c.env.DB, hash);
-
-    if (!result) {
-      return c.json({ code: 16, message: "invalid access token", details: [] }, 401);
-    }
-
-    c.set("user", {
-      id: result.user_id,
-      username: result.username,
-      role: result.role,
-      status: result.row_status,
-    });
-    return next();
-  }
-
-  let claims: Awaited<ReturnType<typeof verifyAccessToken>>;
-  try {
-    claims = await verifyAccessToken(token, c.env.JWT_SECRET);
-  } catch {
-    return c.json({ code: 16, message: "token has expired", details: [] }, 401);
-  }
-
-  const user = await findActiveUserPayload(c.env.DB, claims.sub);
+  const user = await resolveAuthUser(c.env.DB, c.env.JWT_SECRET, c.req);
   if (!user) {
-    return c.json({ code: 16, message: "user not found or archived", details: [] }, 401);
+    const message = token.startsWith("memos_pat_") ? "invalid access token" : "token has expired or user not found";
+    return c.json({ code: 16, message, details: [] }, 401);
   }
 
   c.set("user", user);
   return next();
 });
 
-export const authOptional = createMiddleware<AuthEnv>(async (c, next) => {
-  const token = extractAuthToken(c.req);
+export async function resolveAuthUser(
+  db: D1Database,
+  jwtSecret: string,
+  headers: { header: (name: string) => string | undefined },
+): Promise<UserPayload | undefined> {
+  const token = extractAuthToken(headers);
+  if (!token) {
+    return undefined;
+  }
 
-  if (token) {
-    if (token.startsWith("memos_pat_")) {
-      const hash = await hashPAT(token);
-      const result = await findUserByPATHash(c.env.DB, hash);
-
-      if (result) {
-        c.set("user", {
-          id: result.user_id,
-          username: result.username,
-          role: result.role,
-          status: result.row_status,
-        });
-      }
-    } else {
-      let claims: Awaited<ReturnType<typeof verifyAccessToken>> | undefined;
-      try {
-        claims = await verifyAccessToken(token, c.env.JWT_SECRET);
-      } catch {
-        // Token invalid, continue without user
-      }
-
-      if (claims) {
-        const user = await findActiveUserPayload(c.env.DB, claims.sub);
-        if (user) {
-          c.set("user", user);
-        }
-      }
+  if (token.startsWith("memos_pat_")) {
+    const hash = await hashPAT(token);
+    const result = await findUserByPATHash(db, hash);
+    if (!result) {
+      return undefined;
     }
+    return {
+      id: result.user_id,
+      username: result.username,
+      role: result.role,
+      status: result.row_status,
+    };
+  }
+
+  let claims: Awaited<ReturnType<typeof verifyAccessToken>> | undefined;
+  try {
+    claims = await verifyAccessToken(token, jwtSecret);
+  } catch {
+    return undefined;
+  }
+
+  return findActiveUserPayload(db, claims.sub);
+}
+
+export const authOptional = createMiddleware<AuthEnv>(async (c, next) => {
+  const user = await resolveAuthUser(c.env.DB, c.env.JWT_SECRET, c.req);
+  if (user) {
+    c.set("user", user);
   }
 
   return next();

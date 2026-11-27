@@ -12,13 +12,12 @@ export const uploadService = {
 
     for (const localFile of localFiles) {
       const { file, motionMedia } = localFile;
-      const buffer = new Uint8Array(await file.arrayBuffer());
       const attachment = await attachmentServiceClient.createAttachment({
         attachment: create(AttachmentSchema, {
           filename: file.name,
           size: BigInt(file.size),
           type: file.type,
-          content: buffer,
+          file,
           motionMedia: motionMedia ? create(MotionMediaSchema, motionMedia) : undefined,
         }),
       });

@@ -17,7 +17,8 @@ export const memoServiceClient = {
     if (memo.updateTime) body.updateTime = timestampToISO(memo.updateTime);
     if (memo.pinned !== undefined) body.pinned = memo.pinned;
     if (memo.location) body.location = memo.location;
-    return apiRequest<any>("POST", "/api/v1/memos", body);
+    const data = await apiRequest<any>("POST", "/api/v1/memos", body);
+    return normalizeMemo(data);
   },
 
   async listMemos(req: any) {

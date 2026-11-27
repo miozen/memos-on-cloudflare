@@ -10,7 +10,7 @@ const headers = {
 if (process.env.GITHUB_TOKEN) {
   headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
 }
-const owner = process.env.GITHUB_VERSION_OWNER || "jkjoy";
+const owner = process.env.GITHUB_VERSION_OWNER || "miozen";
 const repo = process.env.GITHUB_VERSION_REPO || "memos-on-cloudflare";
 
 function normalizeVersion(value) {

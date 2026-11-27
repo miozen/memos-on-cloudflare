@@ -10,6 +10,24 @@ import { createErrorBody } from "../error";
 import { deleteCachedKeys, getCachedJson, putCachedJson, sha256Hex } from "../cache";
 import { buildMemoFilterWhere, MemoFilterError } from "../filter/memo-filter";
 import { deliverMemoWebhookEvent, getWebhookActor, type MemoWebhookEventType } from "../webhook";
+import {
+  chunkValues,
+  createPlaceholders,
+  extractMentionUsernames,
+  parseIsoTimestampSeconds,
+  parsePageSize,
+  parsePageTokenOffset,
+  safeJsonParse,
+  VALID_MEMO_VISIBILITIES,
+  VALID_ROW_STATUSES,
+} from "../validation";
+import {
+  createInboxNotifications,
+  deliverNotificationEmails,
+  findActiveMentionedUsers,
+  type DeliverInboxNotificationOptions,
+} from "../notification";
+import { findUserById } from "../db/user";
 
 type MemoApp = { Bindings: Env; Variables: { user: UserPayload } };
 type MemoContext = Context<MemoApp>;
@@ -132,7 +150,7 @@ function parseMemoPayload(content: string) {
 }
 
 function formatMemo(memo: memoDB.MemoRow, creatorUsername?: string) {
-  const payload = JSON.parse(memo.payload || "{}");
+  const payload = safeJsonParse<Record<string, any>>(memo.payload, {});
   return {
     name: `memos/${memo.uid}`,
     creator: `users/${creatorUsername || memo.creator_id}`,
@@ -168,18 +186,6 @@ function formatMemoRelationSnippet(memo: Pick<memoDB.MemoRow, "uid" | "content" 
     return undefined;
   }
   return { name: `memos/${memo.uid}`, snippet: memo.content.slice(0, 120) };
-}
-
-function createPlaceholders(count: number) {
-  return Array.from({ length: count }, () => "?").join(", ");
-}
-
-function chunkValues<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-  return chunks;
 }
 
 async function getMemoAttachments(db: D1Database, memoId: number, memoUid: string) {
@@ -455,6 +461,16 @@ async function invalidateMemoDerivedCaches(cache: KVNamespace | undefined, usern
   await deleteCachedKeys(cache, keys);
 }
 
+function runInBackground(c: MemoContext, task: Promise<unknown>) {
+  try {
+    c.executionCtx.waitUntil(task);
+  } catch {
+    void task.catch((error) => {
+      console.warn("Background task failed", error);
+    });
+  }
+}
+
 function enqueueMemoWebhook(
   c: MemoContext,
   eventType: MemoWebhookEventType,
@@ -462,7 +478,8 @@ function enqueueMemoWebhook(
   memo: unknown,
   actor: UserPayload,
 ) {
-  c.executionCtx.waitUntil(
+  runInBackground(
+    c,
     deliverMemoWebhookEvent({
       db: c.env.DB,
       creatorId,
@@ -471,6 +488,49 @@ function enqueueMemoWebhook(
       actor: getWebhookActor(actor),
     }),
   );
+}
+
+async function notifyMentionedUsers(
+  c: MemoContext,
+  options: {
+    sender: UserPayload;
+    visibility: string;
+    content: string;
+    memoUid: string;
+    relatedMemoUid?: string;
+    relatedMemoContent?: string;
+    excludeUserIds?: Set<number>;
+    onlyUsernames?: Set<string>;
+  },
+) {
+  if (options.visibility === "PRIVATE") {
+    return;
+  }
+
+  const excludeUserIds = new Set(options.excludeUserIds);
+  excludeUserIds.add(options.sender.id);
+  const receivers = await findActiveMentionedUsers(
+    c.env.DB,
+    options.content,
+    excludeUserIds,
+    options.onlyUsernames,
+  );
+  if (receivers.length === 0) {
+    return;
+  }
+
+  const notificationOptions: DeliverInboxNotificationOptions = {
+    db: c.env.DB,
+    sender: { id: options.sender.id, username: options.sender.username },
+    receivers,
+    type: "MEMO_MENTION",
+    memoUid: options.memoUid,
+    memoContent: options.content,
+    relatedMemoUid: options.relatedMemoUid,
+    relatedMemoContent: options.relatedMemoContent,
+  };
+  await createInboxNotifications(notificationOptions);
+  runInBackground(c, deliverNotificationEmails(notificationOptions));
 }
 
 function getAttachmentReference(value: unknown): string {
@@ -599,12 +659,26 @@ memoRoutes.post("/", authRequired, async (c) => {
   const body = await c.req.json();
   const { content, visibility, createTime, updateTime, location } = body;
 
-  if (!content && content !== "") {
+  if (typeof content !== "string") {
     return c.json({ error: "Content is required" }, 400);
   }
 
+  const nextVisibility = visibility ?? "PRIVATE";
+  if (typeof nextVisibility !== "string" || !VALID_MEMO_VISIBILITIES.has(nextVisibility)) {
+    return c.json({ error: "Invalid visibility" }, 400);
+  }
+
+  const createdTs = parseIsoTimestampSeconds(createTime);
+  if (createdTs === null) {
+    return c.json({ error: "Invalid createTime" }, 400);
+  }
+  const updatedTs = parseIsoTimestampSeconds(updateTime);
+  if (updatedTs === null) {
+    return c.json({ error: "Invalid updateTime" }, 400);
+  }
+
   const contentLengthLimit = await getMemoContentLengthLimit(c.env.DB);
-  if (contentLengthLimit > 0 && getUtf8ByteLength(content || "") > contentLengthLimit) {
+  if (contentLengthLimit > 0 && getUtf8ByteLength(content) > contentLengthLimit) {
     return c.json(
       createErrorBody(`Memo content exceeds the maximum allowed length of ${contentLengthLimit} bytes.`, {
         errorKey: "message.memo-content-too-long",
@@ -616,18 +690,15 @@ memoRoutes.post("/", authRequired, async (c) => {
 
   const uid = generateUid();
   const payload = {
-    ...parseMemoPayload(content || ""),
+    ...parseMemoPayload(content),
     ...(location ? { location } : {}),
   };
-
-  const createdTs = createTime ? Math.floor(new Date(createTime).getTime() / 1000) : undefined;
-  const updatedTs = updateTime ? Math.floor(new Date(updateTime).getTime() / 1000) : undefined;
 
   const memo = await memoDB.createMemo(c.env.DB, {
     uid,
     creatorId: user.id,
-    content: content || "",
-    visibility: visibility || "PRIVATE",
+    content,
+    visibility: nextVisibility,
     payload: JSON.stringify(payload),
     createdTs,
     updatedTs,
@@ -636,6 +707,13 @@ memoRoutes.post("/", authRequired, async (c) => {
   if (Array.isArray(body.attachments) && body.attachments.length > 0) {
     await setMemoAttachments(c.env.DB, memo.id, user, body.attachments);
   }
+
+  await notifyMentionedUsers(c, {
+    sender: user,
+    visibility: memo.visibility,
+    content: memo.content,
+    memoUid: memo.uid,
+  });
 
   await invalidateMemoDerivedCaches(c.env.CACHE, [user.username]);
   const enrichedMemo = await enrichMemo(c.env.DB, memo, user.username, user);
@@ -646,18 +724,12 @@ memoRoutes.post("/", authRequired, async (c) => {
 // List memos
 memoRoutes.get("/", authOptional, async (c) => {
   const user = c.get("user");
-  const pageSize = Math.min(Number(c.req.query("pageSize")) || 50, 1000);
+  const pageSize = parsePageSize(c.req.query("pageSize"));
   const pageToken = c.req.query("pageToken");
   const filter = c.req.query("filter") || "";
   const orderBy = c.req.query("orderBy") || "";
   const state = c.req.query("state") || "NORMAL";
-
-  let offset = 0;
-  if (pageToken) {
-    try {
-      offset = Number(atob(pageToken));
-    } catch { /* invalid token, start from 0 */ }
-  }
+  const offset = parsePageTokenOffset(pageToken);
 
   const opts: memoDB.ListMemosOpts = {
     pageSize,
@@ -751,6 +823,9 @@ memoRoutes.patch("/:id", authRequired, async (c) => {
   const updateData: Parameters<typeof memoDB.updateMemo>[2] = {};
 
   if (body.content !== undefined) {
+    if (typeof body.content !== "string") {
+      return c.json({ error: "Content must be a string" }, 400);
+    }
     const contentLengthLimit = await getMemoContentLengthLimit(c.env.DB);
     if (contentLengthLimit > 0 && getUtf8ByteLength(body.content) > contentLengthLimit) {
       return c.json(
@@ -763,25 +838,67 @@ memoRoutes.patch("/:id", authRequired, async (c) => {
     }
     updateData.content = body.content;
     const payload = parseMemoPayload(body.content);
-    const existingPayload = JSON.parse(memo.payload || "{}");
+    const existingPayload = safeJsonParse<Record<string, any>>(memo.payload, {});
     updateData.payload = JSON.stringify({ ...existingPayload, ...payload });
   }
   if (body.location !== undefined) {
-    const existingPayload = JSON.parse((updateData.payload as string) || memo.payload || "{}");
+    const existingPayload = safeJsonParse<Record<string, any>>((updateData.payload as string) || memo.payload, {});
     updateData.payload = JSON.stringify({
       ...existingPayload,
       ...(body.location ? { location: body.location } : { location: null }),
     });
   }
-  if (body.visibility !== undefined) updateData.visibility = body.visibility;
+  if (body.visibility !== undefined) {
+    if (typeof body.visibility !== "string" || !VALID_MEMO_VISIBILITIES.has(body.visibility)) {
+      return c.json({ error: "Invalid visibility" }, 400);
+    }
+    updateData.visibility = body.visibility;
+  }
   if (body.pinned !== undefined) updateData.pinned = body.pinned ? 1 : 0;
-  if (body.rowStatus !== undefined) updateData.row_status = body.rowStatus;
-  if (body.createTime) updateData.created_ts = Math.floor(new Date(body.createTime).getTime() / 1000);
-  if (body.updateTime) updateData.updated_ts = Math.floor(new Date(body.updateTime).getTime() / 1000);
+  if (body.rowStatus !== undefined) {
+    if (typeof body.rowStatus !== "string" || !VALID_ROW_STATUSES.has(body.rowStatus)) {
+      return c.json({ error: "Invalid rowStatus" }, 400);
+    }
+    updateData.row_status = body.rowStatus;
+  }
+  if (body.createTime !== undefined) {
+    const createdTs = parseIsoTimestampSeconds(body.createTime);
+    if (createdTs === null) {
+      return c.json({ error: "Invalid createTime" }, 400);
+    }
+    if (createdTs !== undefined) {
+      updateData.created_ts = createdTs;
+    }
+  }
+  if (body.updateTime !== undefined) {
+    const updatedTs = parseIsoTimestampSeconds(body.updateTime);
+    if (updatedTs === null) {
+      return c.json({ error: "Invalid updateTime" }, 400);
+    }
+    if (updatedTs !== undefined) {
+      updateData.updated_ts = updatedTs;
+    }
+  }
 
   const updated = await memoDB.updateMemo(c.env.DB, memo.id, updateData);
   if (!updated) {
     return c.json({ error: "Update failed" }, 500);
+  }
+
+  if (body.content !== undefined) {
+    const previousMentions = new Set(extractMentionUsernames(memo.content));
+    const newlyMentioned = new Set(
+      extractMentionUsernames(updated.content).filter((name) => !previousMentions.has(name)),
+    );
+    if (newlyMentioned.size > 0) {
+      await notifyMentionedUsers(c, {
+        sender: user,
+        visibility: updated.visibility,
+        content: updated.content,
+        memoUid: updated.uid,
+        onlyUsernames: newlyMentioned,
+      });
+    }
   }
 
   const creatorName = updated.creator_id === user.id ? user.username : (await c.env.DB.prepare("SELECT username FROM user WHERE id = ?").bind(updated.creator_id).first<{ username: string }>())?.username;
@@ -812,8 +929,58 @@ memoRoutes.delete("/:id", authRequired, async (c) => {
 
   const creatorName = memo.creator_id === user.id ? user.username : (await c.env.DB.prepare("SELECT username FROM user WHERE id = ?").bind(memo.creator_id).first<{ username: string }>())?.username;
   const deletedMemo = await enrichMemo(c.env.DB, memo, creatorName, user);
-  await memoDB.deleteMemo(c.env.DB, memo.id);
-  await invalidateMemoDerivedCaches(c.env.CACHE, [creatorName]);
+
+  // Collect the target memo and any descendant comment memos so deleting does not leave orphan rows or R2 objects.
+  const memoIdsToDelete: number[] = [memo.id];
+  const seenMemoIds = new Set<number>([memo.id]);
+  let frontier = [memo.id];
+
+  while (frontier.length > 0) {
+    const nextFrontier: number[] = [];
+    for (const chunk of chunkValues(frontier, 900)) {
+      const { results } = await c.env.DB.prepare(
+        `SELECT related_memo_id FROM memo_relation WHERE type = 'COMMENT' AND memo_id IN (${createPlaceholders(chunk.length)})`
+      ).bind(...chunk).all<{ related_memo_id: number }>();
+      for (const row of results) {
+        if (!seenMemoIds.has(row.related_memo_id)) {
+          seenMemoIds.add(row.related_memo_id);
+          memoIdsToDelete.push(row.related_memo_id);
+          nextFrontier.push(row.related_memo_id);
+        }
+      }
+    }
+    frontier = nextFrontier;
+  }
+
+  const memoRowsMap = await getMemoRowMapByIds(c.env.DB, memoIdsToDelete);
+  const memoUids = [...memoRowsMap.values()].map((row) => row.uid);
+  const creatorIds = [...memoRowsMap.values()].map((row) => row.creator_id);
+  const affectedUsernames = await resolveUsernamesByIds(c.env.DB, creatorIds);
+
+  const attachmentRows = await listAttachmentRowsByMemoIds(c.env.DB, memoIdsToDelete);
+  const r2Keys = attachmentRows.map((att) => att.reference).filter((ref): ref is string => Boolean(ref));
+
+  for (const chunk of chunkValues(memoIdsToDelete, 900)) {
+    await c.env.DB.prepare(`DELETE FROM attachment WHERE memo_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+  }
+  for (const chunk of chunkValues(memoIdsToDelete, 450)) {
+    const placeholders = createPlaceholders(chunk.length);
+    await c.env.DB.prepare(
+      `DELETE FROM memo_relation WHERE memo_id IN (${placeholders}) OR related_memo_id IN (${placeholders})`
+    ).bind(...chunk, ...chunk).run();
+  }
+  for (const chunk of chunkValues(memoUids, 900)) {
+    await c.env.DB.prepare(`DELETE FROM reaction WHERE content_id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+  }
+  for (const chunk of chunkValues(memoIdsToDelete, 900)) {
+    await c.env.DB.prepare(`DELETE FROM memo WHERE id IN (${createPlaceholders(chunk.length)})`).bind(...chunk).run();
+  }
+
+  if (r2Keys.length > 0) {
+    await Promise.allSettled(r2Keys.map((key) => c.env.BUCKET.delete(key)));
+  }
+
+  await invalidateMemoDerivedCaches(c.env.CACHE, [creatorName, ...affectedUsernames.values()]);
   enqueueMemoWebhook(c, "memo.deleted", memo.creator_id, deletedMemo, user);
   return c.json({});
 });
@@ -876,17 +1043,38 @@ memoRoutes.post("/:id/comments", authRequired, async (c) => {
   }
 
   const body = await c.req.json();
+  const commentContent = body.content ?? "";
+  if (typeof commentContent !== "string") {
+    return c.json({ error: "Content must be a string" }, 400);
+  }
+
+  const commentVisibility = body.visibility ?? parentMemo.visibility;
+  if (typeof commentVisibility !== "string" || !VALID_MEMO_VISIBILITIES.has(commentVisibility)) {
+    return c.json({ error: "Invalid visibility" }, 400);
+  }
+
+  const contentLengthLimit = await getMemoContentLengthLimit(c.env.DB);
+  if (contentLengthLimit > 0 && getUtf8ByteLength(commentContent) > contentLengthLimit) {
+    return c.json(
+      createErrorBody(`Memo content exceeds the maximum allowed length of ${contentLengthLimit} bytes.`, {
+        errorKey: "message.memo-content-too-long",
+        errorParams: { size: contentLengthLimit },
+      }),
+      400,
+    );
+  }
+
   const uid = generateUid();
   const payload = {
-    ...parseMemoPayload(body.content || ""),
+    ...parseMemoPayload(commentContent),
     ...(body.location ? { location: body.location } : {}),
   };
 
   const comment = await memoDB.createMemo(c.env.DB, {
     uid,
     creatorId: user.id,
-    content: body.content || "",
-    visibility: body.visibility || parentMemo.visibility,
+    content: commentContent,
+    visibility: commentVisibility,
     payload: JSON.stringify({
       ...payload,
       parent: `memos/${parentMemo.uid}`,
@@ -903,18 +1091,35 @@ memoRoutes.post("/:id/comments", authRequired, async (c) => {
     type: "COMMENT",
   });
 
+  const excludeMentions = new Set<number>([user.id]);
   if (parentMemo.creator_id !== user.id) {
-    const message = JSON.stringify({
-      type: "MEMO_COMMENT",
-      memo: `memos/${comment.uid}`,
-      relatedMemo: `memos/${parentMemo.uid}`,
-      memoSnippet: comment.content.slice(0, 150),
-      relatedMemoSnippet: parentMemo.content.slice(0, 150),
-    });
-    await c.env.DB.prepare(
-      "INSERT INTO inbox (sender_id, receiver_id, status, message) VALUES (?, ?, ?, ?)"
-    ).bind(user.id, parentMemo.creator_id, "UNREAD", message).run();
+    const parentAuthor = await findUserById(c.env.DB, parentMemo.creator_id);
+    if (parentAuthor && parentAuthor.row_status === "NORMAL") {
+      excludeMentions.add(parentAuthor.id);
+      const commentNotification: DeliverInboxNotificationOptions = {
+        db: c.env.DB,
+        sender: { id: user.id, username: user.username },
+        receivers: [parentAuthor],
+        type: "MEMO_COMMENT",
+        memoUid: comment.uid,
+        memoContent: comment.content,
+        relatedMemoUid: parentMemo.uid,
+        relatedMemoContent: parentMemo.content,
+      };
+      await createInboxNotifications(commentNotification);
+      runInBackground(c, deliverNotificationEmails(commentNotification));
+    }
   }
+
+  await notifyMentionedUsers(c, {
+    sender: user,
+    visibility: comment.visibility,
+    content: comment.content,
+    memoUid: comment.uid,
+    relatedMemoUid: parentMemo.uid,
+    relatedMemoContent: parentMemo.content,
+    excludeUserIds: excludeMentions,
+  });
 
   await invalidateMemoDerivedCaches(c.env.CACHE, [user.username]);
   const enrichedComment = await enrichMemo(c.env.DB, comment, user.username, user);

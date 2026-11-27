@@ -4,6 +4,7 @@ import { authOptional, authRequired } from "../middleware/auth";
 import * as settingDB from "../db/setting";
 import { createErrorBody } from "../error";
 import { deleteCachedKeys } from "../cache";
+import { chunkValues, createPlaceholders, parsePageSize, parsePageTokenOffset } from "../validation";
 
 type AttApp = { Bindings: Env; Variables: { user: UserPayload } };
 
@@ -81,18 +82,6 @@ async function findAttachmentByToken(db: D1Database, token: string): Promise<Att
     .first<AttachmentRow>();
 }
 
-function createPlaceholders(count: number) {
-  return Array.from({ length: count }, () => "?").join(", ");
-}
-
-function chunkValues<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-  return chunks;
-}
-
 async function findAttachmentsByTokens(db: D1Database, tokens: string[]): Promise<AttachmentRow[]> {
   const normalizedTokens = [...new Set(tokens.map((token) => token.startsWith("attachments/") ? token.slice("attachments/".length) : token).filter(Boolean))];
   const attachmentsById = new Map<number, AttachmentRow>();
@@ -168,7 +157,8 @@ attachmentRoutes.post("/", authRequired, async (c) => {
 
   let filename: string;
   let fileType: string;
-  let fileData: ArrayBuffer;
+  let fileSize: number;
+  let r2Body: ArrayBuffer | ReadableStream<Uint8Array>;
   let memoId: number | null = null;
 
   if (contentType.includes("multipart/form-data")) {
@@ -186,7 +176,8 @@ attachmentRoutes.post("/", authRequired, async (c) => {
     }
     filename = file.name;
     fileType = file.type;
-    fileData = await file.arrayBuffer();
+    fileSize = file.size;
+    r2Body = file.stream();
     const resolvedMemo = await resolveWritableMemoId(c.env.DB, user, formData.get("memo")?.toString() || null);
     if ("error" in resolvedMemo) return c.json({ error: resolvedMemo.error }, resolvedMemo.status);
     memoId = resolvedMemo.memoId;
@@ -200,8 +191,8 @@ attachmentRoutes.post("/", authRequired, async (c) => {
     memoId = resolvedMemo.memoId;
 
     if (attachment.content) {
-      fileData = decodeBase64Content(attachment.content);
-      if (fileData.byteLength > maxUploadSize) {
+      const decoded = decodeBase64Content(attachment.content);
+      if (decoded.byteLength > maxUploadSize) {
         return c.json(
           createErrorBody(`File too large. Maximum upload size is ${maxUploadSizeMb}MB.`, {
             errorKey: "message.maximum-upload-size-is",
@@ -210,6 +201,8 @@ attachmentRoutes.post("/", authRequired, async (c) => {
           413,
         );
       }
+      fileSize = decoded.byteLength;
+      r2Body = decoded;
     } else {
       return c.json({ error: "No content provided" }, 400);
     }
@@ -218,34 +211,42 @@ attachmentRoutes.post("/", authRequired, async (c) => {
   const uid = crypto.randomUUID().replace(/-/g, "").slice(0, 22);
   const r2Key = `attachments/${uid}/${filename}`;
 
-  // Store in R2
-  await c.env.BUCKET.put(r2Key, fileData, {
+  // Stream or write to R2 before inserting metadata so failed uploads never leave dangling DB rows.
+  await c.env.BUCKET.put(r2Key, r2Body, {
     httpMetadata: { contentType: fileType },
   });
 
-  // Store metadata in D1
+  // Store metadata in D1; roll back the R2 object if D1 insert fails.
   const createdTs = nowTs();
-  const att = await c.env.DB.prepare(
-    `INSERT INTO attachment (uid, creator_id, created_ts, updated_ts, filename, type, size, memo_id, storage_type, reference)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'R2', ?) RETURNING *`
-  )
-    .bind(uid, user.id, createdTs, createdTs, filename, fileType, fileData.byteLength, memoId, r2Key)
-    .first<AttachmentRow>();
+  let att: AttachmentRow | null = null;
+  try {
+    att = await c.env.DB.prepare(
+      `INSERT INTO attachment (uid, creator_id, created_ts, updated_ts, filename, type, size, memo_id, storage_type, reference)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'R2', ?) RETURNING *`
+    )
+      .bind(uid, user.id, createdTs, createdTs, filename, fileType, fileSize, memoId, r2Key)
+      .first<AttachmentRow>();
+  } catch (error) {
+    await c.env.BUCKET.delete(r2Key).catch(() => {});
+    throw error;
+  }
+
+  if (!att) {
+    await c.env.BUCKET.delete(r2Key).catch(() => {});
+    return c.json({ error: "Failed to create attachment record" }, 500);
+  }
 
   await deleteCachedKeys(c.env.CACHE, ["instance:stats"]);
-  return c.json(formatAttachment(att!), 201);
+  return c.json(formatAttachment(att), 201);
 });
 
 // List attachments
 attachmentRoutes.get("/", authRequired, async (c) => {
   const user = c.get("user");
-  const pageSize = Math.min(Number(c.req.query("pageSize")) || 50, 1000);
+  const pageSize = parsePageSize(c.req.query("pageSize"));
   const pageToken = c.req.query("pageToken");
   const filter = c.req.query("filter") || "";
-  let offset = 0;
-  if (pageToken) {
-    try { offset = Number(atob(pageToken)); } catch {}
-  }
+  const offset = parsePageTokenOffset(pageToken);
 
   const whereConditions = ["creator_id = ?"];
   const params: (string | number | null)[] = [user.id];

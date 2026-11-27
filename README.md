@@ -84,16 +84,18 @@ npm run deploy
 
 部署完成后，访问 Workers 分配的域名，首次访问会进入管理员注册页面。
 
-## GitHub Actions 自动部署
+## Cloudflare Workers Git 连接自动部署（推荐）
 
-推送到 `main` 分支会自动触发部署。需要在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加：
+在 Cloudflare Dashboard → **Workers & Pages** → 你的 Worker → **Settings → Build** 中连接 Git 仓库后，推送到 `main` 分支即可全自动完成校验、构建、数据库迁移和部署（**无需在 GitHub 仓库配置任何 Cloudflare Secrets**）：
 
-| Secret | 说明 |
-|--------|------|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token（需要 Workers Scripts:Edit、D1:Edit、R2:Edit 权限） |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID（在 Dashboard 右侧栏可找到） |
+1. **首次资源准备（仅一次）**：创建 D1 (`cfmemos-db`)、R2 (`cfmemos`)、KV (`cfmemos-cache`)，并将你自己的 D1 `database_id` 与 KV `id` 填入 [wrangler.toml](wrangler.toml)。
+2. **Worker 运行时密钥（仅一次）**：在 **Settings → Variables and Secrets** 中添加 Secret `JWT_SECRET`。
+3. **Build 配置（仅一次）**：
+   - **Build API Token**：选择或绑定一个带有 `D1:Edit`、`Workers Scripts:Edit`、`Workers KV Storage:Edit`、`Workers R2 Storage:Edit` 权限的 Token（用于让 `npm run ci:deploy` 自动执行 `wrangler d1 migrations apply cfmemos-db --remote`；无需在 Build variables 中手填 `CLOUDFLARE_ACCOUNT_ID`）。
+   - **Build command**：`npm run ci:build`
+   - **Deploy command**：`npm run ci:deploy`
 
-工作流会自动完成：安装依赖 → 构建前端 → 执行数据库迁移 → 部署 Worker。
+> GitHub Actions（[.github/workflows/deploy.yml](.github/workflows/deploy.yml)）仅负责 PR / Push 的类型检查、单测与构建验证，不再直接部署 Worker。
 
 ## 本地开发
 
